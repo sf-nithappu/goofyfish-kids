@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Pop Pop</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Pop Pop: balloons float up, tap to pop them. Every pop is a note, a burst of confetti and a happy figure.
+const me = new Actor(P.ready);
+let balloons = [], nextId = 0, spawnIn = 0.3, pops = 0, cheerT = 0;
+const GROUND = 0;
+
+function spawn(x) {
+  const R = screenRect();
+  const lo = Math.max(R.l, VIEW.x0) + 50, hi = Math.min(R.r, VIEW.x1) - 50;
+  const big = Math.random() < 0.18;
+  balloons.push({
+    id: nextId++, x: x ?? lo + Math.random() * (hi - lo), y: screenRect().b + 90, r: big ? 58 : 36 + Math.random() * 14,
+    vy: -(50 + Math.random() * 40), phase: Math.random() * 6, col: PAL[(Math.random() * PAL.length) | 0], big,
+  });
+}
+
+function popBalloon(b) {
+  balloons = balloons.filter((o) => o !== b);
+  pops++;
+  const idx = Math.round(((VIEW.y1 - b.y) / (VIEW.y1 - VIEW.y0)) * 8);
+  SND.pop(idx);
+  confetti(b.x, b.y, b.big ? 40 : 18);
+  burst(b.x, b.y, 8);
+  if (b.big) {
+    SND.cheer();
+    kick(60);
+  }
+  if (pops % 6 === 0 || b.big) {
+    cheerT = 1.4;
+    me.clear();
+    me.push({ pose: P.cheer, d: 0.2, ez: 'out' }, { pose: P.leap, d: 0.25 }, { pose: P.cheer, d: 0.25 }, { pose: P.ready, d: 0.4 });
+  }
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -440, y1: 40, minW: 440, focusX: 0 },
+  setup() {
+    for (let i = 0; i < 5; i++) {
+      spawn();
+      const R = screenRect();
+      balloons[i].y = R.t + 80 + Math.random() * (R.b - R.t - 200);
+    }
+  },
+  down(x, y) {
+    // Generous hit area: the closest balloon within its radius plus a fat finger.
+    let best = null, bd = 1e9;
+    for (const b of balloons) {
+      const d = Math.hypot(b.x - x, b.y - y);
+      if (d < b.r + 34 && d < bd) {
+        best = b;
+        bd = d;
+      }
+    }
+    if (best) {
+      popBalloon(best);
+    } else {
+      SND.tok(0.5);
+      dust(x, GROUND, 20, 3);
+      me.clear();
+      me.push({ pose: P.ready, d: 0.1 });
+    }
+  },
+  update(dt) {
+    me.update(dt);
+    cheerT = Math.max(0, cheerT - dt);
+    spawnIn -= dt;
+    if (spawnIn <= 0 && balloons.length < 9) {
+      spawn();
+      spawnIn = 0.55 + Math.random() * 0.6;
+    }
+    for (const b of balloons) {
+      b.y += b.vy * dt;
+      b.x += Math.sin(clock * 1.3 + b.phase) * 14 * dt;
+    }
+    // Balloons that float away are replaced quietly. Nothing is ever lost.
+    balloons = balloons.filter((b) => b.y > screenRect().t - 160);
+  },
+  draw(R) {
+    groundLine();
+    contactShadow(0, 18, 0.1);
+    for (const b of balloons) {
+      const k = 1 + wobble.get(b.id);
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.scale(1 / k, k);
+      // string
+      ctx.strokeStyle = COL.ink;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(0, b.r * 1.15);
+      ctx.bezierCurveTo(8, b.r * 1.5, -8, b.r * 1.8, 0, b.r * 2.3);
+      ctx.stroke();
+      // body
+      ctx.beginPath();
+      ctx.ellipse(0, 0, b.r * 0.86, b.r, 0, 0, Math.PI * 2);
+      inkShape(b.col, 2.6);
+      ctx.beginPath();
+      ctx.moveTo(-5, b.r + 1);
+      ctx.lineTo(5, b.r + 1);
+      ctx.lineTo(0, b.r + 8);
+      ctx.closePath();
+      inkShape(b.col, 2);
+      // shine
+      ctx.strokeStyle = 'rgba(255,255,255,.8)';
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(0, 0, b.r * 0.62, Math.PI * 1.15, Math.PI * 1.4);
+      ctx.stroke();
+      if (b.big) {
+        ctx.fillStyle = '#fff';
+        drawStar(0, 0, b.r * 0.35, clock);
+        inkShape('#fcd34d', 2);
+      }
+      ctx.restore();
+    }
+    const bounce = cheerT > 0 ? 1 : 0;
+    drawFigure(me, 0, GROUND + 8, Math.sin(clock * 2) * 1.2, { scale: 1.1 });
+    if (bounce && cheerT > 0.9) {
+      ctx.fillStyle = COL.accent;
+      drawStar(-40, -150, 10, clock * 3);
+      ctx.fill();
+      drawStar(44, -160, 8, -clock * 3);
+      ctx.fill();
+    }
+  },
+});
+</script>
+</body>
+</html>

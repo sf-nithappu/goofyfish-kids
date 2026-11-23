@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Boing Boing</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Boing Boing: a stick figure bounces on a trampoline. Every tap makes the next bounce higher.
+// High bounces get a flip, a star and a cheer. When nobody taps, he slowly settles back to small bounces.
+const me = new Actor(P.crouch);
+const G = 1000, BED = -30, LAND = 0.16, MAXL = 5, MINL = 0.35;
+const TUCK = mk({ head: [10, -98], chest: [5, -80], hip: [0, -60], fF: [14, -40], fB: [8, -40], hF: [22, -60], eF: [14, -72], hB: [12, -58], eB: [8, -70] });
+let L = MINL, pend = 0, mode = 'air', h = 0, vy = 300, airT = 0, airDur = 1, landT = 0, depth = 0;
+let apexDone = true, flipping = false, starT = 0, apexX = 0, apexY = 0, bounces = 0;
+const clouds = Array.from({ length: 9 }, (_, i) => ({ x: (i * 173) % 700 - 350, y: -90 - i * 66 - (i % 3) * 20, s: 0.7 + (i % 4) * 0.25, sp: 5 + (i % 3) * 4, c: i % 2 ? '#e7f5ff' : '#fff' }));
+const stars = Array.from({ length: 12 }, (_, i) => ({ fx: ((i * 0.37 + 0.08) % 1), y: -300 - ((i * 53) % 330), r: 9 + (i % 3) * 3, ph: i }));
+
+function launch() {
+  if (pend > 0) {
+    L = Math.min(MAXL, L + pend);
+    pend = 0;
+  } else {
+    L = Math.max(MINL, L - 0.22);
+  }
+  const hh = 60 + L * 85;
+  vy = Math.sqrt(2 * G * hh);
+  h = 0;
+  airT = 0;
+  airDur = (2 * vy) / G;
+  mode = 'air';
+  apexDone = false;
+  flipping = L >= 2.6;
+  bounces++;
+  dust(0, 0, 110, 6);
+  me.clear();
+  if (flipping) {
+    me.push({ pose: P.leap, d: 0.12, ez: 'out' }, { pose: TUCK, d: airDur * 0.18 }, { pose: TUCK, d: airDur * 0.4 }, { pose: P.leap, d: airDur * 0.18 }, { pose: P.cheer, d: 0.2 });
+  } else {
+    me.push({ pose: P.leap, d: 0.15, ez: 'out' }, { pose: P.cheer, d: 0.35 });
+  }
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -700, y1: 40, minW: 440, focusX: 0 },
+  setup() {
+    launch();
+  },
+  down(x, y) {
+    pend = Math.min(pend + 1, 3);
+    wobble.hit('tramp', 4);
+    note(Math.round(L * 2) + pend * 2, 0.4, 0.16, 'sine');
+    burst(x, y, 6);
+    confetti(x, y, 5);
+  },
+  update(dt) {
+    me.update(dt);
+    starT = Math.max(0, starT - dt);
+    const R = screenRect();
+    for (const c of clouds) {
+      c.x += (c.sp + L * 12 * c.s) * dt;
+      if (c.x > R.r + 120) {
+        c.x = R.l - 120;
+      }
+    }
+    if (mode === 'air') {
+      airT += dt;
+      vy -= G * dt;
+      h += vy * dt;
+      if (!apexDone && vy <= 0) {
+        apexDone = true;
+        if (flipping) {
+          starT = 0.9;
+          apexX = 0;
+          apexY = BED - h;
+          SND.cheer();
+          confetti(0, BED - h - 70, 16);
+        }
+      }
+      if (h <= 0 && vy < 0) {
+        h = 0;
+        mode = 'land';
+        landT = 0;
+        depth = Math.min(38, -vy * 0.04 + 4);
+        SND.boing(L / MAXL);
+        wobble.hit('tramp', 6);
+        me.clear();
+        me.push({ pose: P.crouch, d: 0.1 });
+      }
+    } else {
+      landT += dt;
+      if (landT >= LAND) {
+        launch();
+      }
+    }
+  },
+  draw(R) {
+    const s = 1 / cam.s;
+    const homeX = R.l + 130 * s, homeY = R.t + 130 * s;
+    // stars show up as he goes high
+    const sa = clamp((L - 1.5) / 2, 0, 1);
+    if (sa > 0) {
+      for (const st of stars) {
+        const sx = R.l + st.fx * (R.r - R.l);
+        if (sx < homeX && st.y < homeY) {
+          continue;
+        }
+        ctx.save();
+        ctx.globalAlpha = sa * (0.65 + 0.35 * Math.sin(clock * 2 + st.ph));
+        drawStar(sx, st.y, st.r, Math.sin(clock + st.ph) * 0.2);
+        inkShape('#fde68a', 1.8);
+        ctx.restore();
+      }
+    }
+    // clouds
+    for (const c of clouds) {
+      if (c.x - 60 * c.s < homeX && c.y < homeY + 40 * c.s) {
+        continue;
+      }
+      const parts = [[-26, 4, 18], [0, -8, 25], [28, 2, 19], [4, 8, 20]];
+      for (const pass of [0, 1]) {
+        ctx.fillStyle = pass ? c.c : COL.ink;
+        for (const [px, py, pr] of parts) {
+          ctx.beginPath();
+          ctx.arc(c.x + px * c.s, c.y + py * c.s, (pr + (pass ? 0 : 2.4)) * c.s, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    groundLine();
+    contactShadow(0, 90, 0.1);
+    // trampoline
+    const d = mode === 'land' ? depth * Math.sin((Math.PI * landT) / LAND) : 0;
+    const k = wobble.get('tramp');
+    const dd = d + k * 40;
+    ctx.save();
+    for (const sx of [-1, 1]) {
+      inkBar(sx * 82, BED + 8, sx * 92, 0, 5, PAL[4]);
+    }
+    ctx.beginPath();
+    ctx.moveTo(-98, BED);
+    ctx.quadraticCurveTo(0, BED + 2 * dd, 98, BED);
+    ctx.lineTo(98, BED + 11);
+    ctx.quadraticCurveTo(0, BED + 11 + 2 * dd, -98, BED + 11);
+    ctx.closePath();
+    inkShape(PAL[3], 2.8);
+    // little springs
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 2;
+    for (const sx of [-76, -38, 0, 38, 76]) {
+      const yy = BED + 11 + 2 * dd * (1 - Math.pow(sx / 98, 2)) / 2;
+      line(sx, yy, sx * 1.05, BED + 20);
+    }
+    ctx.restore();
+    // figure
+    const feet = BED + (mode === 'land' ? d : -h);
+    let rot = 0;
+    if (flipping && mode === 'air') {
+      rot = Math.PI * 2 * EASE.soft(clamp((airT - 0.12 * airDur) / (0.74 * airDur), 0, 1));
+    }
+    drawFigure(me, 0, feet + 8, Math.sin(clock * 3) * 1, { scale: 1.1, rot, pivot: [0, -62] });
+    if (starT > 0) {
+      const a = clamp(starT / 0.4, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = a;
+      const rise = (0.9 - starT) * 30;
+      drawStar(-58, apexY - 110 - rise, 13, clock * 3);
+      inkShape('#fcd34d', 2);
+      drawStar(60, apexY - 80 - rise, 10, -clock * 3);
+      inkShape('#ffa8d5', 2);
+      drawStar(8, apexY - 170 - rise, 9, clock * 2);
+      inkShape('#74c0fc', 2);
+      ctx.restore();
+    }
+  },
+});
+</script>
+</body>
+</html>

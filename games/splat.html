@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Splat Paint</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Splat Paint: tap to splash paint, drag to paint a wobbly line, hold still for 1.5s to wipe the page.
+// Paint lives in world space on a persistent offscreen canvas that is rebuilt from the splat list on resize.
+const me = new Actor(P.ready);
+const off = document.createElement('canvas');
+const og = off.getContext('2d');
+let offKey = '';
+let splats = [];      // committed: { kind:'blob'|'line', col, a, fading }
+let fresh = [];       // squishing in, committed to the canvas after a moment
+let fx = 0, fxGoal = 0, face = 1, flickT = 9, flickTo = [0, -200], dirty = false, fadeAcc = 0;
+let colIdx = 0, hold = null, wipeT = -1, lastNote = 0;
+const strokes = new Map();
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+function nextCol() {
+  colIdx = (colIdx + 1 + ((Math.random() * 3) | 0)) % PAL.length;
+  return PAL[colIdx];
+}
+
+function makeBlob(x, y, r, col) {
+  const n = 22, pts = [];
+  const tongues = [(Math.random() * n) | 0, (Math.random() * n) | 0, (Math.random() * n) | 0];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + rnd(-0.06, 0.06);
+    const rr = r * (tongues.includes(i) ? rnd(1.35, 1.7) : rnd(0.82, 1.08));
+    pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+  }
+  const drops = [];
+  const nd = 4 + ((Math.random() * 4) | 0);
+  for (let i = 0; i < nd; i++) {
+    const a = Math.random() * 6.28, d = r * rnd(1.5, 2.3);
+    drops.push([Math.cos(a) * d, Math.sin(a) * d, r * rnd(0.1, 0.22)]);
+  }
+  return { kind: 'blob', x, y, pts, drops, col, a: 1, t: 0 };
+}
+
+function blobPath(g, s) {
+  const p = s.pts, n = p.length;
+  g.beginPath();
+  const mid = (i) => [(p[i % n][0] + p[(i + 1) % n][0]) / 2, (p[i % n][1] + p[(i + 1) % n][1]) / 2];
+  const m0 = mid(0);
+  g.moveTo(m0[0], m0[1]);
+  for (let i = 1; i <= n; i++) {
+    const m = mid(i);
+    g.quadraticCurveTo(p[i % n][0], p[i % n][1], m[0], m[1]);
+  }
+  g.closePath();
+}
+
+function paint(g, s, alpha, sc) {
+  g.save();
+  g.globalAlpha = alpha;
+  g.lineJoin = 'round';
+  g.lineCap = 'round';
+  if (s.kind === 'blob') {
+    g.translate(s.x, s.y);
+    g.scale(sc || 1, sc || 1);
+    blobPath(g, s);
+    g.fillStyle = s.col;
+    g.fill();
+    g.lineWidth = 3;
+    g.strokeStyle = COL.ink;
+    g.stroke();
+    for (const d of s.drops) {
+      g.beginPath();
+      g.arc(d[0], d[1], d[2], 0, 6.29);
+      g.fill();
+      g.stroke();
+    }
+  } else {
+    const pts = s.pts;
+    for (const [col, extra] of [[COL.ink, 6], [s.col, 0]]) {
+      g.strokeStyle = col;
+      g.beginPath();
+      for (let i = 1; i < pts.length; i++) {
+        g.lineWidth = pts[i][2] + extra;
+        g.beginPath();
+        g.moveTo(pts[i - 1][0], pts[i - 1][1]);
+        g.lineTo(pts[i][0], pts[i][1]);
+        g.stroke();
+      }
+    }
+  }
+  g.restore();
+}
+
+function camMatrix(g) {
+  g.setTransform(dpr * cam.s, 0, 0, dpr * cam.s, dpr * cam.x, dpr * cam.y);
+}
+
+function rebuild() {
+  off.width = cv.width;
+  off.height = cv.height;
+  og.setTransform(1, 0, 0, 1, 0, 0);
+  og.clearRect(0, 0, off.width, off.height);
+  camMatrix(og);
+  for (const s of splats) {
+    paint(og, s, s.a);
+  }
+  dirty = false;
+}
+
+function commit(s) {
+  splats.push(s);
+  if (offKey === camKey()) {
+    paint(og, s, s.a);
+  }
+}
+
+function camKey() {
+  return [cv.width, cv.height, cam.s, cam.x, cam.y].join();
+}
+
+function squishSound(y) {
+  const i = Math.round(clamp((VIEW.y1 - y) / 55, 0, 10));
+  hiss(0.14, 0.2, 'bandpass', 1300, 400, 0.8, 0.2);
+  partial(240, 90, 0.16, 0.16, 'sine', 0.2);
+  note(i, 0.4, 0.13, 'sine');
+}
+
+function droplets(x, y, col, n, spread) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.28, sp = rnd(60, spread || 220);
+    const w = rnd(4, 9);
+    bits.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, r: 0, vr: 0, c: col, t: 0, life: rnd(0.4, 0.8), w, h: w, g: 500, drag: 1.5 });
+  }
+}
+
+function splash(x, y) {
+  const col = nextCol();
+  const s = makeBlob(x, y, rnd(24, 42), col);
+  fresh.push(s);
+  squishSound(y);
+  droplets(x, y, col, 10);
+  // the figure runs over and flicks the brush at it
+  const R = screenRect();
+  fxGoal = clamp(x, Math.max(R.l, VIEW.x0) + 40, Math.min(R.r, VIEW.x1) - 40);
+  flickTo = [x, y];
+  flickT = -0.25;
+  brushCol = col;
+}
+let brushCol = PAL[0];
+
+kid({
+  view: { x0: -300, x1: 300, y0: -440, y1: 40, minW: 440, focusX: 0 },
+  setup() {
+    for (let i = 0; i < 3; i++) {
+      const s = makeBlob(-120 + i * 120, -260 + (i % 2) * 70, rnd(36, 52), PAL[(i * 2 + 1) % PAL.length]);
+      splats.push(s);
+    }
+  },
+  down(x, y, id) {
+    if (wipeT >= 0) {
+      return;
+    }
+    splash(x, y);
+    strokes.set(id, { kind: 'line', pts: [[x, y, 16]], col: brushCol, a: 1, last: [x, y], tn: 0 });
+    hold = strokes.size === 1 ? { id, x, y, t: 0 } : null;
+  },
+  move(x, y, id) {
+    const st = strokes.get(id);
+    if (!st) {
+      return;
+    }
+    if (hold && hold.id === id && Math.hypot(x - hold.x, y - hold.y) > 40) {
+      hold.x = x;
+      hold.y = y;
+      hold.t = 0;
+    }
+    const d = Math.hypot(x - st.last[0], y - st.last[1]);
+    if (d > 9) {
+      st.last = [x, y];
+      st.pts.push([x + rnd(-2.5, 2.5), y + rnd(-2.5, 2.5), rnd(15, 22)]);
+      droplets(x, y, st.col, 1, 120);
+      if (clock - lastNote > 0.09) {
+        lastNote = clock;
+        squishSound(y);
+      }
+      const R = screenRect();
+      fxGoal = clamp(x, Math.max(R.l, VIEW.x0) + 40, Math.min(R.r, VIEW.x1) - 40);
+      flickTo = [x, y];
+      if (flickT > 0.3) {
+        flickT = 0.12;
+      }
+    }
+  },
+  up(x, y, id) {
+    const st = strokes.get(id);
+    strokes.delete(id);
+    if (hold && hold.id === id) {
+      hold = null;
+    }
+    if (st && st.pts.length > 2) {
+      commit(st);
+    }
+  },
+  update(dt) {
+    me.update(dt);
+    // hold to wipe
+    if (hold && wipeT < 0) {
+      hold.t += dt;
+      if (hold.t > 1.5) {
+        wipeT = 0;
+        hold = null;
+        strokes.clear();
+        hiss(0.9, 0.3, 'bandpass', 250, 2600, 0.6, 0.35, 0.15);
+        partial(200, 700, 0.8, 0.12, 'sine', 0.4);
+        setTimeout(SND.cheer, 650);
+        kick(20);
+      }
+    }
+    if (wipeT >= 0) {
+      wipeT += dt / 0.9;
+      const R = screenRect();
+      const ex = R.l - 60 + (R.r - R.l + 120) * wipeT;
+      for (let i = 0; i < 3; i++) {
+        droplets(ex, rnd(R.t, R.b), PAL[(Math.random() * PAL.length) | 0], 1, 160);
+      }
+      if (wipeT >= 1) {
+        wipeT = -1;
+        splats = [];
+        fresh = [];
+        rebuild();
+      }
+    }
+    // fresh splats squish in, then stay on the paper
+    for (let i = fresh.length - 1; i >= 0; i--) {
+      fresh[i].t += dt;
+      if (fresh[i].t > 0.3) {
+        commit(fresh[i]);
+        fresh.splice(i, 1);
+      }
+    }
+    // after ~60 splats the oldest slowly fade away
+    const live = splats.filter((s) => !s.fading);
+    if (live.length > 60) {
+      live[0].fading = true;
+    }
+    fadeAcc += dt;
+    if (splats.some((s) => s.fading)) {
+      for (const s of splats) {
+        if (s.fading) {
+          s.a -= dt / 6;
+        }
+      }
+      splats = splats.filter((s) => s.a > 0.02);
+      if (fadeAcc > 0.12) {
+        fadeAcc = 0;
+        dirty = true;
+      }
+    }
+    // figure
+    const dx = fxGoal - fx;
+    const run = Math.abs(dx) > 6;
+    if (run) {
+      fx += Math.sign(dx) * Math.min(Math.abs(dx), 650 * dt);
+    }
+    if (Math.abs(flickTo[0] - fx) > 4) {
+      face = Math.sign(flickTo[0] - fx) || face;
+    }
+    flickT += dt;
+  },
+  draw(R) {
+    const key = camKey();
+    if (offKey !== key || dirty) {
+      offKey = key;
+      rebuild();
+    }
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (wipeT >= 0) {
+      // paint disappears behind a sweeping edge
+      const ex = (R.l - 60 + (R.r - R.l + 120) * wipeT) * cam.s * dpr + cam.x * dpr;
+      ctx.beginPath();
+      ctx.rect(ex, 0, cv.width, cv.height);
+      ctx.clip();
+    }
+    ctx.drawImage(off, 0, 0);
+    ctx.restore();
+    if (wipeT >= 0) {
+      const ex = R.l - 60 + (R.r - R.l + 120) * wipeT;
+      ctx.strokeStyle = COL.ink;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let y = R.t; y <= R.b; y += 12) {
+        const x = ex + Math.sin(y * 0.05 + clock * 12) * 10;
+        y === R.t ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    for (const s of fresh) {
+      const k = Math.min(1, s.t / 0.25);
+      const sc = k < 1 ? 1 + 0.35 * Math.sin(k * Math.PI) * (1 - k) - (1 - EASE.out(k)) * 0.9 : 1;
+      paint(ctx, s, 1, Math.max(0.05, sc));
+    }
+    for (const st of strokes.values()) {
+      paint(ctx, st, 1);
+    }
+    // hold ring
+    if (hold && hold.t > 0.4) {
+      ctx.strokeStyle = COL.ink;
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(hold.x, hold.y, 52, -Math.PI / 2, -Math.PI / 2 + (hold.t / 1.5) * Math.PI * 2);
+      ctx.stroke();
+    }
+    groundLine();
+    contactShadow(fx, 16, 0.1);
+    // figure with a paint brush
+    const f = Math.max(0, flickT);
+    let pose = P.ready;
+    const sh = [0, -97];
+    let dir = [flickTo[0] - fx, flickTo[1] - (-97 * 1.1)];
+    dir = [Math.abs(dir[0]), dir[1]];
+    const L = Math.hypot(dir[0], dir[1]) || 1;
+    const u = [dir[0] / L, dir[1] / L];
+    if (flickT < 0.5) {
+      const bk = (v, a) => [v[0] * Math.cos(a) - v[1] * Math.sin(a), v[0] * Math.sin(a) + v[1] * Math.cos(a)];
+      const w = bk(u, -1.2);
+      let h;
+      if (flickT < 0) {
+        h = [sh[0] + w[0] * 30, sh[1] + w[1] * 30];
+      } else if (f < 0.1) {
+        const k = EASE.out(f / 0.1);
+        h = [sh[0] + lerp(w[0], u[0], k) * 38, sh[1] + lerp(w[1], u[1], k) * 38];
+      } else {
+        h = [sh[0] + u[0] * 40, sh[1] + u[1] * 40];
+      }
+      pose = mk({ head: [4, -121], hF: h, eF: [sh[0] + 10, sh[1] - 4], hB: [-4, -58], eB: [-6, -78] });
+    }
+    me.pose = pose;
+    const hop = Math.abs(dx0()) > 6 ? -Math.abs(Math.sin(clock * 16)) * 8 : 0;
+    drawFigure(me, fx, 8 + hop, Math.sin(clock * 2) * 1.2, {
+      scale: 1.1,
+      flip: face < 0,
+      over(J) {
+        if (flickT >= 1.2) {
+          return;
+        }
+        const dx = J.handF[0] - J.eF[0], dy = J.handF[1] - J.eF[1];
+        const l = Math.hypot(dx, dy) || 1;
+        const ux = dx / l, uy = dy / l;
+        inkBar(J.handF[0] - ux * 8, J.handF[1] - uy * 8, J.handF[0] + ux * 24, J.handF[1] + uy * 24, 4, '#c9a27a');
+        ctx.beginPath();
+        ctx.arc(J.handF[0] + ux * 30, J.handF[1] + uy * 30, 7, 0, 6.29);
+        inkShape(brushCol, 2);
+      },
+    });
+  },
+});
+function dx0() {
+  return fxGoal - fx;
+}
+</script>
+</body>
+</html>

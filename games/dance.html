@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Dance Party</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Dance Party: every tap changes the dance for everyone, on a steady beat with a soft drum loop.
+const BEAT = 0.5, STEP = BEAT / 2;
+const SCALE = 0.95, FLOOR = 70, FEET_Y = 30;
+const S = (o) => mk(Object.assign({ face: 0.35 }, o));
+
+// Each move: poses played on every half-beat (loops), plus fn(P) for body offsets (P = beats elapsed).
+const MOVES = [
+  { // arms up
+    seq: [S({ head: [0, -123], chest: [0, -98], hip: [0, -66], hF: [20, -135], hB: [-20, -135], eF: [14, -116], eB: [-14, -116] }),
+      S({ head: [0, -119], chest: [0, -94], hip: [0, -62], hF: [30, -120], hB: [-30, -120], eF: [18, -100], eB: [-18, -100] })],
+    fn: (P) => ({ dy: 0, dx: 0, rot: 0 }),
+  },
+  { // side steps
+    seq: [S({ face: 0.7, fF: [20, -8], fB: [-6, -8], kF: [26, -38], kB: [4, -38], hF: [22, -102], hB: [-18, -88] }),
+      S({ face: 0.7, fF: [6, -8], fB: [-16, -8], kF: [14, -38], kB: [-6, -38], hF: [22, -88], hB: [-16, -102] })],
+    fn: (P, i) => ({ dx: Math.sin(P * Math.PI / 2) * 34 * (i % 2 ? -1 : 1), dy: 0, rot: 0, flip: Math.cos(P * Math.PI / 2) * (i % 2 ? -1 : 1) < 0 }),
+  },
+  { // twirl
+    seq: [S({ head: [0, -123], chest: [0, -98], hip: [0, -66], hF: [16, -134], hB: [-14, -132], eF: [12, -116], eB: [-12, -114] }),
+      S({ head: [0, -121], chest: [0, -96], hip: [0, -64], hF: [22, -128], hB: [-20, -126], eF: [16, -110], eB: [-16, -108] })],
+    fn: (P) => ({ dx: 0, dy: -Math.abs(Math.sin(P * Math.PI)) * 6, rot: Math.sin(P * Math.PI * 2) * 0.06, spin: P * Math.PI }),
+  },
+  { // jump
+    seq: [P.crouch, P.leap],
+    fn: (P) => {
+      const f = (P * 2) % 2;
+      return { dx: 0, dy: f >= 1 ? -Math.sin((f - 1) * Math.PI) * 55 : 0, rot: 0 };
+    },
+  },
+  { // hips
+    seq: [S({ face: 0.5, head: [-4, -121], chest: [-5, -96], hip: [7, -65], hF: [22, -84], hB: [-18, -72], eF: [10, -78], eB: [-14, -78] }),
+      S({ face: 0.5, head: [4, -121], chest: [5, -96], hip: [-7, -65], hF: [18, -72], hB: [-22, -84], eF: [10, -78], eB: [-14, -78] })],
+    fn: (P) => ({ dx: 0, dy: 0, rot: Math.sin(P * Math.PI) * 0.1 }),
+  },
+  { // robot
+    seq: [S({ face: 1, head: [2, -121], hF: [8, -123], hB: [-2, -60], eF: [14, -112], eB: [-6, -78] }),
+      S({ face: 1, head: [2, -121], hF: [34, -98], hB: [-2, -60], eF: [20, -90], eB: [-6, -78] }),
+      S({ face: 1, head: [2, -121], hF: [-2, -60], hB: [-8, -123], eF: [10, -78], eB: [-14, -112] }),
+      S({ face: 1, head: [2, -121], hF: [34, -98], hB: [26, -98], eF: [20, -90], eB: [14, -90] })],
+    snap: true,
+    fn: (P) => ({ dx: 0, dy: 0, rot: 0 }),
+  },
+  { // wave
+    seq: [S({ face: 0.6, hF: [14, -140], hB: [-6, -60], eF: [4, -118], eB: [-8, -78], fF: [8, -8], fB: [-10, -8] }),
+      S({ face: 0.6, hF: [28, -138], hB: [-6, -60], eF: [14, -118], eB: [-8, -78], fF: [14, -8], fB: [-6, -8] })],
+    fn: (P) => ({ dx: 0, dy: 0, rot: Math.sin(P * Math.PI) * 0.05 }),
+  },
+  { // split-star jump
+    seq: [S({ face: 0.1, hF: [10, -64], hB: [-10, -64], eF: [8, -80], eB: [-8, -80], fF: [8, -8], fB: [-8, -8], kF: [10, -38], kB: [-10, -38] }),
+      S({ face: 0.1, head: [0, -126], chest: [0, -101], hip: [0, -72], hF: [28, -126], hB: [-28, -126], eF: [16, -112], eB: [-16, -112], fF: [26, -34], fB: [-26, -34], kF: [16, -52], kB: [-16, -52] })],
+    fn: (P) => {
+      const f = (P * 2) % 2;
+      return { dx: 0, dy: f >= 1 ? -Math.sin((f - 1) * Math.PI) * 50 : 0, rot: 0 };
+    },
+  },
+  { // disco point
+    seq: [S({ face: 0.6, hF: [30, -130], hB: [-6, -66], eF: [14, -110], eB: [-8, -80], hip: [5, -65], chest: [-2, -96] }),
+      S({ face: 0.6, hF: [-8, -66], hB: [-30, -128], eF: [10, -80], eB: [-16, -110], hip: [-5, -65], chest: [2, -96] }),
+      S({ face: 0.6, hF: [32, -76], hB: [-6, -66], eF: [16, -92], eB: [-8, -80], hip: [5, -65], chest: [-2, -96] }),
+      S({ face: 0.6, hF: [-8, -66], hB: [-28, -76], eF: [10, -80], eB: [-18, -92], hip: [-5, -65], chest: [2, -96] })],
+    fn: (P) => ({ dx: 0, dy: 0, rot: Math.sin(P * Math.PI * 2) * 0.05 }),
+  },
+];
+
+let nfig = 2, taps = 0, moveIdx = 0, beats = 0, step = -1, melody = 0, joinT = 0;
+const figs = [];
+const tiles = new Map();
+const MELODY = [0, 2, 4, 5, 7, 5, 4, 2, 1, 3, 5, 8, 7, 5, 3, 2];
+const STYLES = ['classic', 'googly', 'classic', 'googly'];
+
+function addFig(i) {
+  figs[i] = { a: new Actor(S({})), x: 0, id: 'f' + i, born: clock };
+}
+
+function drumStep(s) {
+  const k = s % 8;
+  if (k === 0 || k === 4 || k === 5) {
+    partial(130, 52, 0.22, 0.3, 'sine', 0.1);
+  }
+  if (k === 2 || k === 6) {
+    hiss(0.14, 0.1, 'bandpass', 2000, 900, 0.9, 0.2);
+  }
+  if (k % 2 === 1 || k === 0) {
+    hiss(0.04, 0.04, 'highpass', 7000, 6000, 0.7, 0.1);
+  }
+}
+
+function light(col, row, v) {
+  tiles.set(col + ',' + row, v);
+}
+
+function tapMove(x, y) {
+  taps++;
+  moveIdx = (moveIdx + 1) % MOVES.length;
+  const n = MELODY[melody++ % MELODY.length];
+  note(n, 0.55, 0.2, 'triangle');
+  partial(PENTA[n] * 2, 0, 0.2, 0.05, 'sine', 0.4, 0.02);
+  confetti(x, y, 8);
+  burst(x, y, 4);
+  if (taps === 4 && nfig < 3 || taps === 10 && nfig < 4) {
+    addFig(nfig++);
+    SND.cheer();
+  }
+  // nearest figure gets a wobble
+  let best = null;
+  for (const f of figs) {
+    if (!best || Math.abs(f.x - x) < Math.abs(best.x - x)) {
+      best = f;
+    }
+  }
+  if (best) {
+    wobble.hit(best.id, 6);
+  }
+  for (let i = 0; i < 6; i++) {
+    light((Math.random() * 20 - 10) | 0, (Math.random() * 2) | 0, 1);
+  }
+  if (taps % 8 === 0) {
+    SND.cheer();
+    kick(25);
+    const R = screenRect();
+    for (let i = 0; i < 5; i++) {
+      confetti(R.l + (R.r - R.l) * (0.15 + i * 0.175), R.t + 40, 24);
+    }
+  }
+  step = Math.floor(beats * 2) - 1; // restart pose on the current step
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -330, y1: 80, minW: 440, focusX: 0 },
+  setup() {
+    addFig(0);
+    addFig(1);
+  },
+  down(x, y) {
+    tapMove(x, y);
+  },
+  update(dt) {
+    beats += dt / BEAT;
+    const s = Math.floor(beats * 2);
+    const mv = MOVES[moveIdx];
+    if (s !== step) {
+      step = s;
+      drumStep(s);
+      figs.forEach((f, i) => {
+        f.a.clear();
+        f.a.push({ pose: mv.seq[(s + (mv.snap ? 0 : 0)) % mv.seq.length], d: mv.snap ? 0.05 : STEP * 0.7, ez: mv.snap ? 'lin' : 'out' });
+      });
+      // floor tiles light up on the beat in a running pattern
+      if (s % 2 === 0) {
+        const b = s / 2;
+        for (let c = -12; c <= 12; c++) {
+          for (let r = 0; r < 2; r++) {
+            if (((c + b * 2 + r * 2) % 4 + 4) % 4 === 0) {
+              light(c, r, 1);
+            }
+          }
+        }
+      }
+    }
+    for (const [k, v] of tiles) {
+      if (v <= 0.02) {
+        tiles.delete(k);
+      } else {
+        tiles.set(k, v - dt * 2.2);
+      }
+    }
+    const gap = 105;
+    figs.forEach((f, i) => {
+      f.a.update(dt);
+      f.x = lerp(f.x, (i - (nfig - 1) / 2) * gap, Math.min(1, dt * 5));
+    });
+  },
+  draw(R) {
+    // floor tiles
+    const TW = 70, TH = FLOOR / 2;
+    for (let r = 0; r < 2; r++) {
+      for (let c = Math.floor(R.l / TW) - 1; c <= Math.ceil(R.r / TW); c++) {
+        const lit = tiles.get(c + ',' + r) || 0;
+        ctx.beginPath();
+        ctx.rect(c * TW, r * TH, TW, TH);
+        ctx.globalAlpha = 0.18 + 0.82 * clamp(lit, 0, 1);
+        ctx.fillStyle = PAL[(((c + r * 3) % 7) + 7) % 7];
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = COL.ink;
+        ctx.stroke();
+      }
+    }
+    groundLine();
+    // disco ball
+    const sw = Math.sin(clock * 1.2) * 10;
+    const bx = sw, by = -250;
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 2;
+    line(bx, R.t - 10, bx, by - 30);
+    ctx.beginPath();
+    ctx.arc(bx, by, 30, 0, 6.29);
+    inkShape('#e5e7eb', 2.5);
+    for (let i = 0; i < 7; i++) {
+      const a = clock * 1.5 + i * 0.9;
+      const px = bx + Math.cos(a) * 20 * Math.cos(i), py = by + Math.sin(i * 1.7) * 20;
+      ctx.beginPath();
+      ctx.rect(px - 5, py - 5, 10, 10);
+      ctx.fillStyle = PAL[i % 7];
+      ctx.globalAlpha = 0.5 + 0.5 * Math.sin(clock * 3 + i);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    ctx.beginPath();
+    ctx.arc(bx, by, 30, 0, 6.29);
+    ctx.stroke();
+
+    const mv = MOVES[moveIdx];
+    figs.forEach((f, i) => {
+      const o = mv.fn(beats, i);
+      const k = 1 + wobble.get(f.id);
+      const born = Math.min(1, (clock - f.born) / 0.4);
+      const px = f.x + (o.dx || 0), py = FEET_Y + (o.dy || 0);
+      ctx.save();
+      ctx.translate(px, FEET_Y);
+      ctx.scale((o.spin !== undefined ? Math.cos(o.spin) : 1) / k, k * (0.3 + 0.7 * EASE.out(born)));
+      ctx.translate(-px, -FEET_Y);
+      contactShadow(px, 18, 0.1, FEET_Y);
+      drawFigure(f.a, px, py + 8, Math.sin(clock * 4 + i) * 1.2, {
+        scale: SCALE, flip: !!o.flip, rot: o.rot, pivot: [0, -8], style: STYLES[i],
+      });
+      ctx.restore();
+    });
+  },
+});
+</script>
+</body>
+</html>

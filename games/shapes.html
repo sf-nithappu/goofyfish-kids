@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Shape Home</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Shape Home: drag each loose shape to the hole with its outline. Right hole: giggle, note, confetti, cheer.
+// Wrong place: it wobbles and slides gently home. A tap sends a shape to its hole. Nothing ever fails.
+const me = new Actor(P.ready);
+const TYPES = ['circle', 'square', 'triangle', 'star', 'heart'];
+const R_SHAPE = 33, HOLE_Y = -340, LOOSE_Y = -185, GAP = 82;
+let holes = [], shapes = [], drag = null, cheerT = 0, roundDone = 0, nid = 0, keyN = 0;
+
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function shapePath(type, r) {
+  ctx.beginPath();
+  if (type === 'circle') {
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+  } else if (type === 'square') {
+    ctx.rect(-r * 0.86, -r * 0.86, r * 1.72, r * 1.72);
+  } else if (type === 'triangle') {
+    ctx.moveTo(0, -r * 1.05);
+    ctx.lineTo(r * 1.08, r * 0.78);
+    ctx.lineTo(-r * 1.08, r * 0.78);
+    ctx.closePath();
+  } else if (type === 'star') {
+    drawStar(0, 0, r * 1.18, 0);
+  } else {
+    ctx.moveTo(0, r * 0.92);
+    ctx.bezierCurveTo(-r * 1.45, r * 0.05, -r * 0.85, -r * 1.0, 0, -r * 0.4);
+    ctx.bezierCurveTo(r * 0.85, -r * 1.0, r * 1.45, r * 0.05, 0, r * 0.92);
+    ctx.closePath();
+  }
+}
+
+function newRound() {
+  const order = shuffle(TYPES.slice());
+  const cols = shuffle(PAL.slice()).slice(0, 5);
+  holes = order.map((type, i) => ({ type, x: (i - 2) * GAP, y: HOLE_Y, filled: null }));
+  const spots = shuffle(TYPES.map((_, i) => i));
+  shapes = TYPES.map((type, i) => {
+    const hx = (spots[i] - 2) * GAP + (Math.random() - 0.5) * 14;
+    const hy = LOOSE_Y + (Math.random() - 0.5) * 40;
+    return { id: 's' + nid++, type, col: cols[i], x: hx, y: LOOSE_Y + 150, ox: hx, oy: hy, tx: hx, ty: hy, rot: (Math.random() - 0.5) * 0.7, mode: 'back', hole: null, pop: 0 };
+  });
+}
+
+function giggle(i) {
+  note(7 + (i % 3), 0.18, 0.13, 'sine');
+  setTimeout(() => note(9 + (i % 2), 0.18, 0.12, 'sine'), 90);
+  setTimeout(() => note(8 + (i % 3), 0.28, 0.11, 'sine'), 190);
+}
+
+function cheerFigure() {
+  cheerT = 1;
+  me.clear();
+  me.push({ pose: P.cheer, d: 0.2, ez: 'out' }, { pose: P.leap, d: 0.22 }, { pose: P.cheer, d: 0.22 }, { pose: P.ready, d: 0.4 });
+}
+
+function snapIn(s) {
+  const h = holes.find((o) => o.type === s.type);
+  h.filled = s;
+  s.mode = 'home';
+  s.hole = h;
+  s.tx = h.x;
+  s.ty = h.y;
+  s.pop = 1;
+  wobble.hit(s.id, 8);
+  const n = holes.filter((o) => o.filled).length;
+  giggle(n);
+  note(n * 2, 0.6, 0.16, 'triangle');
+  confetti(h.x, h.y, 22);
+  burst(h.x, h.y, 6);
+  cheerFigure();
+  if (n === holes.length) {
+    roundDone = 1.6;
+  }
+}
+
+function sendBack(s) {
+  s.mode = 'back';
+  s.tx = s.ox;
+  s.ty = s.oy;
+  wobble.hit(s.id, 7);
+  note(0, 0.25, 0.1, 'sine');
+  dust(s.x, s.y + 10, 30, 4);
+}
+
+function pick(x, y) {
+  let best = null, bd = 1e9;
+  for (const s of shapes) {
+    if (s.mode === 'home') {
+      continue;
+    }
+    const d = Math.hypot(s.x - x, s.y - y);
+    if (d < R_SHAPE + 38 && d < bd) {
+      best = s;
+      bd = d;
+    }
+  }
+  return best;
+}
+
+function nextLoose() {
+  return shapes.find((s) => s.mode !== 'home');
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -440, y1: 40, minW: 440, focusX: 0 },
+  setup: newRound,
+  down(x, y, id) {
+    const s = pick(x, y);
+    if (s) {
+      drag = { s, id, ax: x, ay: y, dx: s.x - x, dy: s.y - y, moved: 0 };
+      s.mode = 'drag';
+      s.z = ++keyN;
+      wobble.hit(s.id, 5);
+      note(3, 0.2, 0.1, 'sine');
+    } else {
+      SND.tok(0.5);
+      dust(x, 0, 20, 3);
+    }
+  },
+  move(x, y, id) {
+    if (!drag || drag.id !== id) {
+      return;
+    }
+    const s = drag.s;
+    drag.moved = Math.max(drag.moved, Math.hypot(x - drag.ax, y - drag.ay));
+    s.x = x + drag.dx;
+    s.y = y + drag.dy;
+    s.tx = s.x;
+    s.ty = s.y;
+  },
+  up(x, y, id) {
+    if (!drag || drag.id !== id) {
+      return;
+    }
+    const s = drag.s;
+    const tap = drag.moved < 14;
+    drag = null;
+    if (tap) {
+      snapIn(s);
+      return;
+    }
+    const h = holes.find((o) => !o.filled && Math.hypot(o.x - s.x, o.y - s.y) < R_SHAPE + 34);
+    if (h && h.type === s.type) {
+      snapIn(s);
+    } else {
+      sendBack(s);
+    }
+  },
+  key(code, dn) {
+    if (!dn) {
+      return true;
+    }
+    const s = nextLoose();
+    if (s) {
+      if (drag && drag.s === s) {
+        drag = null;
+      }
+      snapIn(s);
+    }
+    return true;
+  },
+  update(dt) {
+    me.update(dt);
+    cheerT = Math.max(0, cheerT - dt);
+    for (const s of shapes) {
+      if (s.mode === 'drag') {
+        continue;
+      }
+      const k = Math.min(1, dt * (s.mode === 'home' ? 14 : 7));
+      s.x += (s.tx - s.x) * k;
+      s.y += (s.ty - s.y) * k;
+      s.rot += ((s.mode === 'home' ? 0 : s.rot) - s.rot) * k;
+      s.pop = Math.max(0, s.pop - dt * 2);
+    }
+    if (roundDone > 0) {
+      roundDone -= dt;
+      if (roundDone <= 0) {
+        SND.cheer();
+        confetti(0, HOLE_Y, 40);
+        confetti(-120, HOLE_Y, 20);
+        confetti(120, HOLE_Y, 20);
+        kick(40);
+        me.clear();
+        me.push({ pose: P.cheer, d: 0.2, ez: 'out' }, { pose: P.leap, d: 0.25 }, { pose: P.cheer, d: 0.3 }, { pose: P.leap, d: 0.25 }, { pose: P.ready, d: 0.4 });
+        cheerT = 1.4;
+        setTimeout(newRound, 900);
+        roundDone = -1;
+      }
+    }
+  },
+  draw(R) {
+    groundLine();
+    contactShadow(0, 18, 0.1);
+    // the board with its holes
+    ctx.beginPath();
+    roundRect(-208, HOLE_Y - 58, 416, 116, 22);
+    inkShape('#fff3c4', 3);
+    for (const h of holes) {
+      ctx.save();
+      ctx.translate(h.x, h.y);
+      shapePath(h.type, R_SHAPE + 3);
+      ctx.fillStyle = 'rgba(20,20,20,0.09)';
+      ctx.fill();
+      ctx.lineWidth = 2.6;
+      ctx.strokeStyle = COL.ink;
+      ctx.lineJoin = 'round';
+      ctx.setLineDash(h.filled ? [] : [7, 5]);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // figure
+    drawFigure(me, -10, 8 * 0.95, Math.sin(clock * 2) * 1.2, { scale: 0.95 });
+    if (cheerT > 0.6) {
+      ctx.fillStyle = COL.accent;
+      drawStar(-60, -150, 10, clock * 3);
+      ctx.fill();
+      drawStar(44, -160, 8, -clock * 3);
+      ctx.fill();
+    }
+    // loose shapes, dragged one on top
+    const order = shapes.slice().sort((a, b) => (a.mode === 'drag' ? 1 : 0) - (b.mode === 'drag' ? 1 : 0) || (a.z || 0) - (b.z || 0));
+    for (const s of order) {
+      const k = 1 + wobble.get(s.id);
+      const sc = (s.mode === 'drag' ? 1.18 : 1) * (1 + s.pop * 0.25);
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.rot + (s.mode === 'back' ? Math.sin(clock * 6 + s.x) * 0.05 * wobble.get(s.id) * 8 : 0));
+      ctx.scale(sc / k, sc * k);
+      if (s.mode === 'drag') {
+        ctx.save();
+        ctx.translate(5, 9);
+        shapePath(s.type, R_SHAPE);
+        ctx.fillStyle = 'rgba(20,20,20,0.12)';
+        ctx.fill();
+        ctx.restore();
+      }
+      shapePath(s.type, R_SHAPE);
+      inkShape(s.col, 2.8);
+      ctx.restore();
+    }
+  },
+});
+</script>
+</body>
+</html>

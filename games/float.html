@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Keep It Floating</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Keep It Floating: a big balloon drifts down, the figure hops under it and bops it back up.
+// The floor is soft (balloons boing back up), the breeze is gentle, nothing ever ends.
+const me = new Actor(P.ready);
+const SC = 1.1, GRAV = 1600;
+let fx = 0, fy = 0, fvy = 0, face = 1, target = null, targetT = 0, bopT = 0, bops = 0, poseKey = '';
+let balloons = [], nextId = 1, wind = 0;
+const stars = [];
+
+function setPose(key, pose, d) {
+  if (key === poseKey) {
+    return;
+  }
+  poseKey = key;
+  me.clear();
+  me.push({ pose, d: d || 0.12, ez: 'out' });
+}
+
+function sparkle(x, y) {
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * 6.28 + Math.random();
+    stars.push({ x: x + Math.cos(a) * 14, y: y + Math.sin(a) * 14, vx: Math.cos(a) * 60, vy: Math.sin(a) * 60 - 20, t: 0, r: 7 + Math.random() * 5, c: PAL[(Math.random() * PAL.length) | 0] });
+  }
+}
+
+function bounds() {
+  const R = screenRect();
+  return { l: Math.max(R.l, VIEW.x0), r: Math.min(R.r, VIEW.x1), t: Math.max(R.t, VIEW.y0 - 40) };
+}
+
+function addBalloon(first) {
+  const B = bounds();
+  const r = first ? 64 : 50;
+  const used = new Set(balloons.map((b) => b.col));
+  const col = PAL.filter((c) => !used.has(c))[(Math.random() * 3) | 0] || PAL[nextId % PAL.length];
+  balloons.push({
+    id: nextId++, x: first ? 0 : B.l + r + Math.random() * (B.r - B.l - 2 * r), y: first ? -330 : B.t - r - 20,
+    vx: 0, vy: 20, r, col, cd: 0, phase: Math.random() * 6,
+  });
+}
+
+function bop(b, fromX, fromFigure) {
+  b.vy = -(170 + Math.random() * 40);
+  b.vx = clamp(b.vx + (b.x - fromX) * 2.2 + (Math.random() - 0.5) * 30, -70, 70);
+  b.cd = 0.35;
+  wobble.hit(b.id, 7);
+  const idx = Math.round(clamp((0 - b.y) / 60, 0, 10));
+  note(idx, 0.45, 0.17, 'sine');
+  SND.tok(0.7);
+  sparkle(b.x, b.y + b.r * 0.6);
+  confetti(b.x, b.y + b.r * 0.8, 6);
+  if (fromFigure) {
+    bops++;
+    bopT = 0.35;
+    if (bops === 5 || bops === 14) {
+      if (balloons.length < 3) {
+        addBalloon(false);
+        SND.cheer();
+      }
+    }
+  }
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -440, y1: 40, minW: 440, focusX: 0 },
+  setup() {
+    addBalloon(true);
+  },
+  down(x, y) {
+    let best = null, bd = 1e9;
+    for (const b of balloons) {
+      const d = Math.hypot(b.x - x, b.y - y);
+      if (d < b.r + 34 && d < bd) {
+        best = b;
+        bd = d;
+      }
+    }
+    const B = bounds();
+    target = clamp(x, B.l + 40, B.r - 40);
+    targetT = 2.5;
+    if (best) {
+      bop(best, x, false);
+    } else {
+      SND.tok(0.6);
+      note(Math.round((y + 400) / 50), 0.3, 0.1, 'sine');
+      burst(x, y, 5);
+    }
+  },
+  update(dt) {
+    me.update(dt);
+    bopT = Math.max(0, bopT - dt);
+    targetT = Math.max(0, targetT - dt);
+    const B = bounds();
+    wind = Math.sin(clock * 0.35) * 16 + Math.sin(clock * 0.83 + 1) * 8;
+
+    // Figure: hop toward the tap, or under the lowest balloon, and jump when a balloon comes down.
+    let low = null;
+    for (const b of balloons) {
+      if (!low || b.y > low.y) {
+        low = b;
+      }
+    }
+    const goal = targetT > 0 && target !== null ? target : low ? low.x : 0;
+    const dx = clamp(goal, B.l + 40, B.r - 40) - fx;
+    const onGround = fy <= 0 && fvy >= 0;
+    if (onGround) {
+      fy = 0;
+      fvy = 0;
+      if (low && Math.abs(low.x - fx) < low.r + 40 && low.y > -340 && low.vy >= 0) {
+        fvy = -560;
+        SND.tok(0.3);
+        dust(fx, 0, 30, 3);
+      } else if (Math.abs(dx) > 10) {
+        fvy = -380;
+        dust(fx, 0, 24, 2);
+      }
+    }
+    if (!onGround || fvy < 0) {
+      fvy += GRAV * dt;
+      fy -= fvy * dt;
+      if (fy <= 0 && fvy > 0) {
+        fy = 0;
+        fvy = 0;
+        dust(fx, 0, 26, 3);
+      }
+    }
+    if (fy > 0 || fvy < 0) {
+      if (Math.abs(dx) > 6) {
+        fx += Math.sign(dx) * Math.min(Math.abs(dx) / dt, 190) * dt;
+        face = Math.sign(dx);
+      }
+    }
+    fx = clamp(fx, B.l + 40, B.r - 40);
+    if (bopT > 0) {
+      setPose('cheer', P.cheer, 0.08);
+    } else if (fy > 2) {
+      setPose('leap', P.leap, 0.1);
+    } else {
+      setPose('ready', P.ready, 0.15);
+    }
+
+    // Balloons: slow drift, breeze, soft floor, bouncy walls.
+    const zy = -(fy + 135);
+    for (const b of balloons) {
+      b.cd = Math.max(0, b.cd - dt);
+      b.vy += 55 * dt;
+      b.vy = Math.min(b.vy, 60);
+      b.vx += (wind - b.vx * 0.5) * dt * 0.8;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      if (b.x < B.l + b.r) {
+        b.x = B.l + b.r;
+        b.vx = Math.abs(b.vx) * 0.8 + 10;
+        note(2, 0.2, 0.06, 'sine');
+      } else if (b.x > B.r - b.r) {
+        b.x = B.r - b.r;
+        b.vx = -Math.abs(b.vx) * 0.8 - 10;
+        note(2, 0.2, 0.06, 'sine');
+      }
+      if (b.y < B.t + b.r) {
+        b.y = B.t + b.r;
+        b.vy = Math.abs(b.vy) * 0.5 + 15;
+      }
+      if (b.y + b.r + 8 > 0) {
+        b.y = -b.r - 8;
+        b.vy = -(190 + Math.random() * 30);
+        b.vx += (Math.random() - 0.5) * 40;
+        wobble.hit(b.id, 8);
+        SND.boing(Math.random());
+        dust(b.x, 0, b.r, 4);
+      }
+      if (b.cd <= 0 && b.vy > -30 && Math.hypot(b.x - (fx + face * 6), b.y - zy) < b.r + 24) {
+        bop(b, fx, true);
+      }
+    }
+    for (let i = stars.length - 1; i >= 0; i--) {
+      const s = stars[i];
+      s.t += dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.vx *= 0.94;
+      s.vy *= 0.94;
+      if (s.t > 0.7) {
+        stars.splice(i, 1);
+      }
+    }
+  },
+  draw(R) {
+    groundLine();
+    contactShadow(fx, 16 * (1 - Math.min(1, fy / 160) * 0.5), 0.1);
+    for (const b of balloons) {
+      contactShadow(b.x, b.r * 0.6 * clamp(1 + b.y / 500, 0.3, 1), 0.07);
+    }
+    // a few breeze curls drifting with the wind
+    ctx.strokeStyle = COL.faint;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+      const span = R.r - R.l + 200;
+      const x = R.l - 100 + (((i * 0.27 + clock * 0.02 * Math.sign(wind || 1) + 10) % 1) * span);
+      const y = -120 - i * 70 + Math.sin(clock + i) * 6;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.bezierCurveTo(x + 14, y - 8, x + 28, y + 8, x + 42, y);
+      ctx.stroke();
+    }
+    for (const b of balloons) {
+      const k = 1 + wobble.get(b.id);
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.rotate(clamp(b.vx / 400, -0.2, 0.2));
+      ctx.scale(1 / k, k);
+      ctx.strokeStyle = COL.ink;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(0, b.r * 1.15);
+      ctx.bezierCurveTo(8 + Math.sin(clock * 2 + b.phase) * 5, b.r * 1.5, -8, b.r * 1.7, 0, b.r * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(0, 0, b.r * 0.86, b.r, 0, 0, Math.PI * 2);
+      inkShape(b.col, 2.8);
+      ctx.beginPath();
+      ctx.moveTo(-6, b.r + 1);
+      ctx.lineTo(6, b.r + 1);
+      ctx.lineTo(0, b.r + 9);
+      ctx.closePath();
+      inkShape(b.col, 2);
+      ctx.strokeStyle = 'rgba(255,255,255,.8)';
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(0, 0, b.r * 0.62, Math.PI * 1.15, Math.PI * 1.4);
+      ctx.stroke();
+      ctx.restore();
+    }
+    drawFigure(me, fx, -fy + 8, Math.sin(clock * 2) * 1.2, { scale: SC, flip: face < 0 });
+    for (const s of stars) {
+      ctx.globalAlpha = 1 - s.t / 0.7;
+      ctx.fillStyle = s.c;
+      drawStar(s.x, s.y, s.r * (1 + s.t), s.t * 4);
+      inkShape(s.c, 1.6);
+      ctx.globalAlpha = 1;
+    }
+  },
+});
+</script>
+</body>
+</html>

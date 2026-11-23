@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Fish Feed</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Fish Feed: tap to drop food, a goofy fish swims over and eats it. Every 5th bite is a happy loop.
+const WY = -170, FLOOR = -10, MAXP = 12;
+const me = new Actor(P.ready);
+const fish = { x: 60, y: -90, vx: 0, vy: 0, face: 1, fa: 1, tx: 120, ty: -90, wt: 0, tail: 0, loop: null, col: PAL[6] };
+let pellets = [], bubbles = [], nextId = 1, eaten = 0, ambient = 1;
+
+function swimBounds() {
+  const R = screenRect();
+  return { l: -30, r: Math.min(R.r, VIEW.x1 + 200) - 70, t: -145, b: -35 };
+}
+function addBubble(x, y, r) {
+  bubbles.push({ x, y, r: r || 3 + Math.random() * 4, vy: 30 + Math.random() * 25, ph: Math.random() * 6 });
+}
+function eat(p) {
+  pellets = pellets.filter((q) => q !== p);
+  SND.chomp();
+  for (let i = 0; i < 3; i++) {
+    addBubble(p.x + (Math.random() - 0.5) * 16, p.y - 6, 3 + Math.random() * 4);
+    setTimeout(() => SND.bubble(), 60 + i * 90);
+  }
+  wobble.hit('fish', 9);
+  confetti(p.x, p.y, 3);
+  eaten++;
+  me.clear();
+  me.push({ pose: P.cheer, d: 0.15, ez: 'out' }, { pose: P.ready, d: 0.4 });
+  if (eaten % 5 === 0 && !fish.loop) {
+    fish.loop = { t: 0, cx: clamp(fish.x, -20, swimBounds().r), cy: clamp(fish.y, -100, -50), f: fish.face, did: false };
+    me.clear();
+    me.push({ pose: P.cheer, d: 0.2, ez: 'out' }, { pose: P.leap, d: 0.25 }, { pose: P.cheer, d: 0.25 }, { pose: P.leap, d: 0.25 }, { pose: P.cheer, d: 0.3 }, { pose: P.ready, d: 0.4 });
+  }
+}
+
+kid({
+  view: { x0: -260, x1: 260, y0: -330, y1: 40, minW: 440, focusX: 0 },
+  down(x, y) {
+    const R = screenRect();
+    const px = clamp(x, -40, Math.min(R.r, VIEW.x1 + 200) - 30);
+    const py = Math.min(y, WY - 10);
+    pellets.push({ id: nextId++, x: px, y: py, vy: 40, col: PAL[(nextId * 3) % PAL.length], bt: 0 });
+    if (pellets.length > MAXP) {
+      const o = pellets.shift();
+      confetti(o.x, o.y, 2);
+    }
+    note(nextId % 8, 0.3, 0.13, 'sine');
+    burst(px, py, 4);
+    SND.bubble();
+  },
+  update(dt) {
+    me.update(dt);
+    const B = swimBounds();
+    for (const p of pellets) {
+      const inW = p.y > WY;
+      if (!inW) {
+        p.vy = Math.min(p.vy + 500 * dt, 220);
+      } else {
+        if (p.vy > 24) {
+          p.vy -= 400 * dt;
+          if (p.vy < 24) p.vy = 24;
+          SND.splash && p.vy > 100 && SND.bubble();
+          for (let i = 0; i < 2; i++) addBubble(p.x, WY + 4);
+        }
+        p.x += Math.sin(clock * 2 + p.id) * 5 * dt;
+        p.bt -= dt;
+        if (p.bt <= 0 && p.y < FLOOR - 4) {
+          p.bt = 0.5 + Math.random() * 0.5;
+          addBubble(p.x + 4, p.y - 8, 2 + Math.random() * 2);
+        }
+      }
+      p.y = Math.min(FLOOR, p.y + p.vy * dt);
+    }
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      b.y -= b.vy * dt;
+      b.x += Math.sin(clock * 3 + b.ph) * 8 * dt;
+      if (b.y < WY + 4) bubbles.splice(i, 1);
+    }
+    ambient -= dt;
+    if (ambient <= 0) {
+      ambient = 0.9 + Math.random();
+      addBubble(B.l + Math.random() * (B.r - B.l), FLOOR - 4);
+    }
+    // fish
+    const f = fish;
+    if (f.loop) {
+      const lp = f.loop;
+      lp.t += dt;
+      const k = Math.min(1, lp.t / 1.3);
+      const th = Math.PI * 2 * EASE.soft(k);
+      f.x = lp.cx + lp.f * 36 * Math.sin(th);
+      f.y = lp.cy - 36 * (1 - Math.cos(th));
+      f.face = lp.f;
+      f.fa += (f.face - f.fa) * Math.min(1, dt * 7);
+      f.rot = -lp.f * th;
+      if (!lp.did && k > 0.4) {
+        lp.did = true;
+        SND.cheer();
+        confetti(f.x, f.y - 10, 22);
+        kick(20);
+        for (let i = 0; i < 5; i++) addBubble(f.x + (Math.random() - 0.5) * 40, f.y);
+      }
+      f.tail += dt * 14;
+      if (k >= 1) {
+        f.loop = null;
+        f.rot = 0;
+        f.vx = lp.f * 50;
+        f.vy = 0;
+      }
+    } else {
+      f.rot = 0;
+      let tgt = null, bd = 1e9;
+      for (const p of pellets) {
+        const d = Math.hypot(p.x - f.x, p.y - f.y);
+        if (d < bd) {
+          bd = d;
+          tgt = p;
+        }
+      }
+      let sp = 55;
+      if (tgt) {
+        f.tx = tgt.x - f.face * 38;
+        f.ty = tgt.y;
+        sp = Math.min(135, bd * 1.8 + 45);
+      } else {
+        f.wt -= dt;
+        if (f.wt <= 0 || Math.hypot(f.tx - f.x, f.ty - f.y) < 15) {
+          f.wt = 2.5 + Math.random() * 2.5;
+          f.tx = B.l + Math.random() * (B.r - B.l);
+          f.ty = B.t + Math.random() * (B.b - B.t);
+        }
+      }
+      f.ty = clamp(f.ty, -150, -30);
+      const dx = f.tx - f.x, dy = f.ty - f.y, d = Math.hypot(dx, dy) || 1;
+      const s = Math.min(sp, d * 2.5 + 12);
+      f.vx += ((dx / d) * s - f.vx) * Math.min(1, dt * 2.5);
+      f.vy += ((dy / d) * s - f.vy) * Math.min(1, dt * 2.5);
+      f.x += f.vx * dt;
+      f.y = clamp(f.y + f.vy * dt, -150, -30);
+      f.x = clamp(f.x, -30, B.r + 40);
+      if (Math.abs(f.vx) > 10) f.face = Math.sign(f.vx);
+      f.fa += (f.face - f.fa) * Math.min(1, dt * 7);
+      f.tail += dt * (4 + Math.hypot(f.vx, f.vy) / 12);
+      const mx = f.x + f.face * 44, my = f.y + 4;
+      for (const p of pellets.slice()) {
+        if (Math.hypot(p.x - mx, p.y - my) < 30) {
+          eat(p);
+          break;
+        }
+      }
+    }
+  },
+  draw(R) {
+    // water
+    ctx.fillStyle = '#e7f5ff';
+    ctx.fillRect(-140, WY, R.r + 160, -WY);
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 2.4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let x = -140; x <= R.r + 20; x += 8) {
+      const y = WY + Math.sin(x * 0.07 + clock * 2) * 2.2;
+      x === -140 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    groundLine();
+    // seaweed and pebbles
+    for (const sx of [60, 180, 300]) {
+      if (sx > R.r - 20) continue;
+      const pts = [];
+      for (let i = 0; i <= 6; i++) pts.push([sx + Math.sin(clock * 1.5 + i * 0.6 + sx) * i * 2.2, -i * 13]);
+      for (const [w, c] of [[9, COL.ink], [5, PAL[2]]]) {
+        ctx.strokeStyle = c;
+        ctx.lineWidth = w;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+        ctx.stroke();
+      }
+    }
+    for (const [px, pw] of [[20, 9], [120, 7], [240, 10]]) {
+      ctx.beginPath();
+      ctx.ellipse(px, -4, pw, 5, 0, 0, Math.PI * 2);
+      inkShape('#e5e5e5', 2);
+    }
+    // bank and pier
+    ctx.beginPath();
+    ctx.moveTo(R.l - 30, WY);
+    ctx.lineTo(-150, WY);
+    ctx.quadraticCurveTo(-128, WY, -124, WY + 22);
+    ctx.quadraticCurveTo(-112, -60, -92, 0);
+    ctx.lineTo(R.l - 30, 0);
+    ctx.closePath();
+    inkShape(PAL[2], 2.6);
+    inkBar(-72, WY + 8, -72, -95, 5, '#d9a86c');
+    inkBar(-130, WY + 8, -130, WY + 22, 5, '#d9a86c');
+    roundRect(-148, WY - 8, 94, 10, 2);
+    inkShape('#ffc078', 2.6);
+    drawFigure(me, -178, WY + 8, Math.sin(clock * 2) * 1.2, { scale: 1.1 });
+    // food
+    for (const p of pellets) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+      inkShape(p.col, 2.2);
+    }
+    // fish
+    const f = fish;
+    const k = wobble.get('fish');
+    const wag = Math.sin(f.tail) * 10;
+    const sw = 1 + Math.sin(clock * 2.1) * 0.02;
+    ctx.save();
+    ctx.translate(f.x, f.y + Math.sin(clock * 2.5) * 2);
+    ctx.rotate(f.rot || 0);
+    ctx.scale(f.fa * (1 + k) * sw, 1 - k);
+    // tail
+    ctx.beginPath();
+    ctx.moveTo(-36, -2);
+    ctx.quadraticCurveTo(-58, -8 + wag * 0.4, -80 + wag * 0.3, -28 + wag);
+    ctx.quadraticCurveTo(-68, 0 + wag * 0.5, -82 + wag * 0.3, 28 + wag);
+    ctx.quadraticCurveTo(-58, 8 + wag * 0.4, -36, 6);
+    ctx.closePath();
+    inkShape(PAL[0], 2.8);
+    // top fin
+    ctx.beginPath();
+    ctx.moveTo(-14, -26);
+    ctx.quadraticCurveTo(0, -52 + wag * 0.3, 22, -27);
+    ctx.closePath();
+    inkShape(PAL[0], 2.6);
+    // body
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 48, 31, 0, 0, Math.PI * 2);
+    inkShape(f.col, 3);
+    ctx.strokeStyle = 'rgba(255,255,255,.75)';
+    ctx.lineWidth = 6;
+    for (const sx of [-18, -4]) {
+      ctx.beginPath();
+      ctx.arc(sx - 14, 0, 26, -0.7, 0.7);
+      ctx.stroke();
+    }
+    // side fin
+    ctx.save();
+    ctx.translate(-6, 8);
+    ctx.rotate(Math.sin(f.tail * 0.8) * 0.35);
+    ctx.beginPath();
+    ctx.ellipse(-8, 8, 14, 7, 0.6, 0, Math.PI * 2);
+    inkShape(PAL[0], 2.4);
+    ctx.restore();
+    // cheek
+    ctx.beginPath();
+    ctx.ellipse(26, 12, 7, 4.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,100,130,.45)';
+    ctx.fill();
+    // googly eye
+    ctx.beginPath();
+    ctx.arc(24, -9, 12, 0, Math.PI * 2);
+    inkShape('#fff', 2.4);
+    ctx.fillStyle = COL.ink;
+    ctx.beginPath();
+    ctx.arc(26 + Math.sin(clock * 2.3) * 3.5, -8 + Math.cos(clock * 1.9) * 3.5 + 2, 5.5, 0, Math.PI * 2);
+    ctx.fill();
+    // smile
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.arc(34, 2, 12 + k * 30, 0.35, 1.45);
+    ctx.stroke();
+    ctx.restore();
+    // bubbles
+    for (const b of bubbles) {
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,.7)';
+      ctx.fill();
+      ctx.strokeStyle = COL.ink;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  },
+});
+</script>
+</body>
+</html>

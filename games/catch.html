@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Snack Catch</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Snack Catch: the figure holds a big basket over his head. Slow, big snacks fall. Follow the pointer (or arrow keys),
+// catch them for a chomp and a hop. Misses bounce softly and roll away. Nothing is ever lost.
+const SC = 1.15, GROUND = 0;
+const BASKET = mk({ head: [0, -121], chest: [0, -96], hip: [0, -65], hF: [17, -136], hB: [-17, -136], eF: [16, -116], eB: [-16, -116] });
+const RUN1 = mk({ fF: [22, -12], fB: [-16, -10], kF: [26, -44], kB: [-8, -30] }, BASKET);
+const RUN2 = mk({ fF: [-14, -10], fB: [18, -12], kF: [8, -30], kB: [24, -44] }, BASKET);
+const HOP = mk({ fF: [8, -26], fB: [-8, -26], kF: [14, -48], kB: [-4, -48], head: [0, -123], chest: [0, -98] }, BASKET);
+const SHRUG = mk({ hF: [30, -84], hB: [-30, -84], eF: [22, -80], eB: [-22, -80], head: [0, -119] });
+const me = new Actor(BASKET);
+let fx = 0, tx = 0, dir = 1, hopY = 0, hopV = 0, runPh = 0, items = [], spawnIn = 0.2, nextId = 1, shrugCd = 0, caught = 0;
+const arrows = { l: false, r: false };
+const KINDS = ['apple', 'banana', 'cookie', 'strawberry', 'cupcake'];
+
+function range() {
+  const R = screenRect();
+  return [Math.max(R.l, VIEW.x0) + 60, Math.min(R.r, VIEW.x1) - 60];
+}
+function spawn(x) {
+  const [lo, hi] = range();
+  const kind = KINDS[(Math.random() * KINDS.length) | 0];
+  let px = x ?? lo + Math.random() * (hi - lo);
+  for (let tries = 0; tries < 8 && x === undefined && items.some((o) => o.state === 'fall' && Math.abs(o.x - px) < 100 && o.y < screenRect().t + 160); tries++) {
+    px = lo + Math.random() * (hi - lo);
+  }
+  items.push({ id: 'f' + nextId++, kind, x: px, y: screenRect().t - 60, r: 34 + Math.random() * 6, vx: 0, vy: 55 + Math.random() * 35, rot: 0, vr: (Math.random() - 0.5) * 1.2, state: 'fall', bounces: 0, t: 0, i: KINDS.indexOf(kind) });
+}
+const basketY = () => GROUND + 8 - 150 * SC;
+
+function setTarget(x) {
+  const [lo, hi] = range();
+  tx = clamp(x, lo - 20, hi + 20);
+}
+function hop() {
+  hopV = -230;
+  me.clear();
+  me.push({ pose: HOP, d: 0.12, ez: 'out' }, { pose: BASKET, d: 0.3 });
+}
+function catchIt(f) {
+  items = items.filter((o) => o !== f);
+  caught++;
+  SND.chomp();
+  note(f.i * 2 + (caught % 3), 0.45, 0.2, 'triangle');
+  wobble.hit('basket', 9);
+  confetti(f.x, basketY() - 18, 14);
+  hop();
+}
+
+function fruit(kind, r) {
+  const u = r / 34;
+  ctx.save();
+  ctx.scale(u, u);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  if (kind === 'apple') {
+    ctx.beginPath();
+    ctx.moveTo(0, -24);
+    ctx.bezierCurveTo(14, -34, 38, -22, 32, 4);
+    ctx.bezierCurveTo(28, 28, 10, 34, 0, 28);
+    ctx.bezierCurveTo(-10, 34, -28, 28, -32, 4);
+    ctx.bezierCurveTo(-38, -22, -14, -34, 0, -24);
+    inkShape(PAL[0], 2.8);
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 3.4;
+    line(0, -24, 4, -38);
+    ctx.beginPath();
+    ctx.ellipse(12, -34, 10, 5, -0.5, 0, 6.3);
+    inkShape(PAL[2], 2.2);
+    ctx.strokeStyle = 'rgba(255,255,255,.8)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 2, 22, Math.PI * 1.1, Math.PI * 1.35);
+    ctx.stroke();
+  } else if (kind === 'banana') {
+    ctx.beginPath();
+    ctx.moveTo(-34, -14);
+    ctx.bezierCurveTo(-30, 26, 20, 38, 38, -8);
+    ctx.bezierCurveTo(42, -14, 32, -14, 30, -8);
+    ctx.bezierCurveTo(16, 14, -14, 12, -22, -20);
+    ctx.closePath();
+    inkShape(PAL[1], 2.8);
+    ctx.beginPath();
+    ctx.rect(-38, -26, 14, 10);
+    inkShape('#a98467', 2.2);
+    ctx.beginPath();
+    ctx.rect(32, -16, 10, 10);
+    inkShape('#a98467', 2);
+  } else if (kind === 'cookie') {
+    ctx.beginPath();
+    ctx.arc(0, 0, 32, 0, 6.3);
+    inkShape('#e8b97a', 2.8);
+    ctx.fillStyle = '#7a4a2a';
+    for (const [x, y] of [[-10, -12], [12, -8], [-4, 10], [16, 14], [-18, 8], [4, -22]]) {
+      ctx.beginPath();
+      ctx.ellipse(x, y, 5, 4, x, 0, 6.3);
+      ctx.fill();
+    }
+  } else if (kind === 'strawberry') {
+    ctx.beginPath();
+    ctx.moveTo(-28, -16);
+    ctx.bezierCurveTo(-34, 10, -8, 34, 0, 36);
+    ctx.bezierCurveTo(8, 34, 34, 10, 28, -16);
+    ctx.bezierCurveTo(16, -26, -16, -26, -28, -16);
+    inkShape(PAL[0], 2.8);
+    ctx.fillStyle = '#fff6b0';
+    for (const [x, y] of [[-12, -6], [8, -8], [-2, 6], [14, 6], [-14, 10], [2, 20]]) {
+      ctx.beginPath();
+      ctx.ellipse(x, y, 2.4, 3.4, 0, 0, 6.3);
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.moveTo(-22, -20);
+    ctx.lineTo(-10, -32);
+    ctx.lineTo(0, -24);
+    ctx.lineTo(10, -32);
+    ctx.lineTo(22, -20);
+    ctx.lineTo(0, -14);
+    ctx.closePath();
+    inkShape(PAL[2], 2.4);
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-26, -2);
+    ctx.lineTo(-18, 30);
+    ctx.lineTo(18, 30);
+    ctx.lineTo(26, -2);
+    ctx.closePath();
+    inkShape(PAL[3], 2.6);
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 1.6;
+    line(-8, 0, -6, 29);
+    line(8, 0, 6, 29);
+    ctx.beginPath();
+    ctx.arc(-14, -6, 15, 0, 6.3);
+    ctx.arc(14, -6, 15, 0, 6.3);
+    ctx.arc(0, -16, 16, 0, 6.3);
+    inkShape(PAL[5], 2.6);
+    ctx.beginPath();
+    ctx.arc(0, -36, 6, 0, 6.3);
+    inkShape(PAL[0], 2.2);
+    ctx.fillStyle = '#fff';
+    for (const [x, y] of [[-14, -10], [8, -12], [0, -24]]) {
+      ctx.fillRect(x, y, 4, 2);
+    }
+  }
+  ctx.restore();
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -420, y1: 40, minW: 440, focusX: 0 },
+  setup() {
+    for (let i = 0; i < 3; i++) {
+      spawn();
+      items[i].y = screenRect().t + 40 + i * 110;
+    }
+    cv.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'mouse') {
+        setTarget(toWorldEv(e)[0]);
+      }
+    });
+  },
+  down(x) {
+    setTarget(x);
+    SND.tok(0.5);
+    dust(fx, GROUND, 20, 3);
+  },
+  move(x) {
+    setTarget(x);
+  },
+  key(code, d) {
+    if (code === 'ArrowLeft') {
+      arrows.l = d;
+      return true;
+    }
+    if (code === 'ArrowRight') {
+      arrows.r = d;
+      return true;
+    }
+    return false;
+  },
+  update(dt) {
+    me.update(dt);
+    shrugCd -= dt;
+    const [lo, hi] = range();
+    if (arrows.l || arrows.r) {
+      setTarget(fx + (arrows.r ? 1 : 0) * 200 - (arrows.l ? 1 : 0) * 200);
+    }
+    // run toward the target
+    const d = tx - fx;
+    const sp = Math.min(Math.abs(d) * 6, 520);
+    if (Math.abs(d) > 3) {
+      fx += Math.sign(d) * Math.min(Math.abs(d), sp * dt);
+      dir = Math.sign(d);
+      runPh += dt * (6 + sp / 50);
+    }
+    fx = clamp(fx, lo - 20, hi + 20);
+    const running = Math.abs(d) > 12;
+    if (me.idle) {
+      me.pose = running ? pathPose([RUN1, RUN2], 0.5 + 0.5 * Math.sin(runPh)) : BASKET;
+    }
+    hopV += 900 * dt;
+    hopY = Math.min(0, hopY + hopV * dt);
+    if (hopY === 0 && hopV > 0) {
+      hopV = 0;
+    }
+
+    spawnIn -= dt;
+    if (spawnIn <= 0 && items.filter((i) => i.state === 'fall').length < 5) {
+      spawn();
+      spawnIn = 0.9 + Math.random() * 0.8;
+    }
+    const R = screenRect();
+    const by = basketY();
+    for (const f of items) {
+      f.t += dt;
+      f.rot += f.vr * dt;
+      if (f.state === 'fall') {
+        f.y += f.vy * dt;
+        if (Math.abs(f.x - fx) < 50 && f.y > by - 30 - f.r * 0.3 && f.y < by + 14) {
+          f.caught = true;
+          continue;
+        }
+        if (f.y > by + 14) {
+          f.state = 'miss';
+        }
+      } else {
+        f.vy += 420 * dt;
+        f.y += f.vy * dt;
+        f.x += f.vx * dt;
+        if (f.y > GROUND - f.r + 6) {
+          f.y = GROUND - f.r + 6;
+          if (f.bounces < 2) {
+            f.vy = -Math.abs(f.vy) * 0.42;
+            f.bounces++;
+            wobble.hit(f.id, 5);
+            SND.tok(0.5);
+            if (!f.vx) {
+              f.vx = (f.x > fx ? 1 : -1) * (50 + Math.random() * 30);
+              f.vr = f.vx * 0.02;
+            }
+            if (shrugCd <= 0 && Math.abs(f.x - fx) < 160) {
+              shrugCd = 2;
+              me.clear();
+              me.push({ pose: SHRUG, d: 0.18, ez: 'out' }, { pose: SHRUG, d: 0.35 }, { pose: BASKET, d: 0.3 });
+            }
+          } else {
+            f.vy = 0;
+          }
+        }
+      }
+    }
+    for (const f of items.filter((o) => o.caught)) {
+      catchIt(f);
+    }
+    items = items.filter((f) => f.x > R.l - 80 && f.x < R.r + 80 && f.t < 14);
+  },
+  draw(R) {
+    groundLine();
+    contactShadow(fx, 24, 0.1);
+    for (const f of items) {
+      const k = wobble.get(f.id);
+      ctx.save();
+      ctx.translate(f.x, f.y);
+      ctx.rotate(f.rot);
+      ctx.scale(1 / (1 + k), 1 + k);
+      fruit(f.kind, f.r);
+      ctx.restore();
+    }
+    const bk = wobble.get('basket');
+    drawFigure(me, fx, GROUND + 8 + hopY, Math.sin(clock * 2) * 1.2, {
+      scale: SC,
+      flip: dir < 0,
+      under(J) {
+        const cx = (J.handF[0] + J.handB[0]) / 2, cy = (J.handF[1] + J.handB[1]) / 2 - 14;
+        ctx.save();
+        ctx.translate(cx, cy + 18);
+        ctx.scale(1 - bk, 1 + bk * 1.5);
+        ctx.translate(-cx, -(cy + 18));
+        ctx.beginPath();
+        ctx.moveTo(cx - 36, cy - 14);
+        ctx.lineTo(cx + 36, cy - 14);
+        ctx.lineTo(cx + 27, cy + 18);
+        ctx.lineTo(cx - 27, cy + 18);
+        ctx.closePath();
+        inkShape('#e0b27a', 2.6);
+        ctx.strokeStyle = 'rgba(20,20,20,.55)';
+        ctx.lineWidth = 1.4;
+        for (let i = -2; i <= 2; i++) {
+          line(cx + i * 12, cy - 12, cx + i * 9, cy + 17);
+        }
+        line(cx - 32, cy + 2, cx + 32, cy + 2);
+        roundRect(cx - 40, cy - 22, 80, 10, 5);
+        inkShape('#c98f4f', 2.6);
+        ctx.restore();
+      },
+    });
+  },
+});
+</script>
+</body>
+</html>

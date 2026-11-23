@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Count Hop</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Count Hop: each tap hops to the next numbered stone; that many stars pop out one by one. After 10 he cheers and hops back.
+const me = new Actor(P.ready);
+const SP = 88, SW = 76, SH = 60, N = 10;
+const sx = (i) => (i - 4.5) * SP;
+let cur = 0, next = 0, hop = null, pending = 0, stars = [], timers = [], back = null, camX = 0, shown = -1, cheerT = 0;
+
+function speak(n) {
+  try {
+    if (!window.speechSynthesis || (window.GK && GK.muted())) {
+      return;
+    }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(String(n));
+    u.lang = 'en-US';
+    u.rate = 0.9;
+    u.pitch = 1.2;
+    u.volume = 0.8;
+    speechSynthesis.speak(u);
+  } catch (e) {
+    // speech is optional
+  }
+}
+
+function startHop() {
+  const to = next;
+  hop = { from: cur, to, t: 0, d: 0.55 };
+  next = (next + 1) % N;
+  me.clear();
+  me.push({ pose: P.crouch, d: 0.1 }, { pose: P.leap, d: 0.3, ez: 'out' }, { pose: P.crouch, d: 0.1 }, { pose: P.ready, d: 0.25 });
+  SND.whoosh();
+}
+
+function land(i) {
+  cur = i;
+  shown = i;
+  stars = [];
+  timers = [];
+  for (let k = 0; k <= i; k++) {
+    timers.push({ t: 0.08 + k * 0.17, k });
+  }
+  wobble.hit('stone' + i, 9);
+  dust(sx(i), -SH, 50, 6);
+  SND.thunk(0.5);
+  speak(i + 1);
+  if (i === N - 1) {
+    timers.push({ t: 0.08 + N * 0.17 + 0.1, fin: true });
+  }
+}
+
+function trayPos(k, n, cx) {
+  const per = 5, row = (k / per) | 0, col = k % per;
+  const inRow = Math.min(per, n - row * per);
+  return [cx + (col - (inRow - 1) / 2) * 40, -285 + row * 42];
+}
+
+function finale() {
+  SND.cheer();
+  kick(30);
+  const x = sx(N - 1);
+  confetti(x, -150, 40);
+  confetti(x - 80, -120, 20);
+  confetti(x + 80, -120, 20);
+  cheerT = 1.6;
+  me.clear();
+  me.push({ pose: P.cheer, d: 0.2, ez: 'out' }, { pose: P.leap, d: 0.25 }, { pose: P.cheer, d: 0.25 }, { pose: P.leap, d: 0.25 }, { pose: P.cheer, d: 0.4 });
+  back = { wait: 1.6, t: 0 };
+}
+
+kid({
+  view: { x0: -450, x1: 450, y0: -330, y1: 150, minW: 440, focusX: 0 },
+  setup() {
+    cur = 0;
+    next = 0;
+  },
+  down() {
+    if (back) {
+      // he is busy running home: still answer with a little pop
+      note((Math.random() * 8) | 0, 0.3, 0.14, 'sine');
+      confetti(sx(cur), -100, 6);
+      return;
+    }
+    if (hop) {
+      pending = Math.min(1, pending + 1);
+      SND.tok(0.5);
+      return;
+    }
+    startHop();
+  },
+  update(dt) {
+    me.update(dt);
+    cheerT = Math.max(0, cheerT - dt);
+    if (hop) {
+      hop.t += dt;
+      if (hop.t >= hop.d) {
+        const to = hop.to;
+        hop = null;
+        land(to);
+        if (pending && to !== N - 1) {
+          pending = 0;
+          startHop();
+        }
+        pending = 0;
+      }
+    }
+    for (let i = timers.length - 1; i >= 0; i--) {
+      const m = timers[i];
+      m.t -= dt;
+      if (m.t <= 0) {
+        timers.splice(i, 1);
+        if (m.fin) {
+          finale();
+        } else {
+          stars.push({ k: m.k, id: 'star' + m.k, born: clock });
+          note(m.k, 0.45, 0.16, 'triangle');
+          wobble.hit('star' + m.k, 7);
+          wobble.hit('stone' + cur, 3);
+          const p = trayPos(m.k, cur + 1, trayX());
+          burst(p[0], p[1], 4);
+        }
+      }
+    }
+    if (back) {
+      if (back.wait > 0) {
+        back.wait -= dt;
+        if (back.wait <= 0) {
+          back.t = 0;
+          back.from = cur;
+          back.d = 1.9;
+          me.clear();
+          note(2, 0.3, 0.1, 'sine');
+        }
+      } else {
+        back.t += dt;
+        const u = Math.min(1, back.t / back.d);
+        const hops = 5, h = (u * hops) % 1;
+        if (!back.hopped || back.hopped !== Math.floor(u * hops)) {
+          back.hopped = Math.floor(u * hops);
+          me.clear();
+          me.push({ pose: P.leap, d: 0.18 }, { pose: P.ready, d: 0.2 });
+          SND.pop(back.hopped * 2);
+        }
+        back.x = lerp(sx(back.from), sx(0), EASE.soft ? EASE.soft(u) : u);
+        back.y = -SH - Math.sin(h * Math.PI) * 40;
+        if (u >= 1) {
+          back = null;
+          cur = 0;
+          next = 0;
+          stars = [];
+          shown = -1;
+          me.clear();
+          me.push({ pose: P.ready, d: 0.3 });
+          SND.pop(0);
+        }
+      }
+    }
+    if (innerWidth < innerHeight) {
+      const fx = figPos()[0];
+      camX += (fx - camX) * Math.min(1, dt * 5);
+      cam.x = cw / 2 - camX * cam.s;
+    }
+  },
+  draw(R) {
+    drawGround(Math.min(R.l, -520) - 20, Math.max(R.r, 520) + 20);
+    // stones
+    for (let i = 0; i < N; i++) {
+      const k = 1 + wobble.get('stone' + i);
+      const x = sx(i);
+      ctx.save();
+      ctx.translate(x, 0);
+      ctx.scale(1 / k, k);
+      ctx.beginPath();
+      roundRect(-SW / 2, -SH, SW, SH, 12);
+      inkShape(PAL[i % PAL.length], 2.8);
+      ctx.restore();
+      ctx.save();
+      ctx.translate(x, -SH / 2 + 16);
+      const nk = 1 + wobble.get('stone' + i) * 1.6;
+      ctx.scale(1 / nk, nk);
+      ctx.font = "46px 'Balsamiq Sans', 'Comic Sans MS', sans-serif";
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.lineWidth = 6;
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#fff';
+      ctx.strokeText(String(i + 1), 0, 0);
+      ctx.fillStyle = COL.ink;
+      ctx.fillText(String(i + 1), 0, 0);
+      ctx.restore();
+    }
+    // stars popping out above the figure
+    if (shown >= 0) {
+      const n = shown + 1, cx = trayX();
+      for (const s of stars) {
+        const p = trayPos(s.k, n, cx);
+        const age = Math.min(1, (clock - s.born) / 0.25);
+        const sc = (EASE.out ? EASE.out(age) : age) * (1 + wobble.get(s.id));
+        ctx.save();
+        ctx.translate(p[0], p[1]);
+        ctx.scale(sc, sc);
+        drawStar(0, 0, 17, Math.sin(clock * 1.5 + s.k) * 0.12);
+        inkShape(s.k % 2 ? '#fcd34d' : PAL[s.k % PAL.length], 2.4);
+        ctx.restore();
+      }
+    }
+    const [fx, fy] = figPos();
+    contactShadow(fx, 18, 0.1, 0);
+    drawFigure(me, fx, fy + 8, Math.sin(clock * 2) * 1.2, { scale: 0.95 });
+    if (cheerT > 0.8) {
+      ctx.fillStyle = COL.accent;
+      drawStar(fx - 50, fy - 170, 10, clock * 3);
+      ctx.fill();
+      drawStar(fx + 50, fy - 180, 8, -clock * 3);
+      ctx.fill();
+    }
+  },
+});
+
+function trayX() {
+  const R = screenRect();
+  return clamp(sx(cur), R.l + 120, R.r - 120);
+}
+function figPos() {
+  if (back && back.x !== undefined) {
+    return [back.x, back.y];
+  }
+  if (hop) {
+    const u = clamp((hop.t - 0.1) / 0.3, 0, 1), e = EASE.soft ? EASE.soft(u) : u;
+    return [lerp(sx(hop.from), sx(hop.to), e), -SH - Math.sin(u * Math.PI) * 80];
+  }
+  return [sx(cur), -SH];
+}
+</script>
+</body>
+</html>

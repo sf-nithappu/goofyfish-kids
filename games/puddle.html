@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Puddle Splash</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Puddle Splash: the figure jogs in place while puddles scroll by. Tap to jump; land in a puddle for a big splash.
+const me = new Actor(P.ready);
+const HOME = -90, SPEED = 190, VJ = 520, GJ = 1400, AIR = (2 * VJ) / GJ;
+let puddles = [], ripples = [], nextId = 1, sc = 0, fx = HOME;
+let air = false, airT = 0, jy = 0, fromX = HOME, toX = HOME, idle = 0, happy = 0, rippleIn = 0, dustIn = 0;
+
+const runA = mk({ head: [6, -119], chest: [4, -95], hip: [0, -65], fF: [22, -24], kF: [24, -46], fB: [-20, -10], kB: [-6, -34], hF: [-12, -76], eF: [-14, -92], hB: [22, -88], eB: [8, -82] });
+const runB = mk({ head: [6, -119], chest: [4, -95], hip: [0, -65], fB: [22, -24], kB: [24, -46], fF: [-20, -10], kF: [-6, -34], hB: [-12, -76], eB: [-14, -92], hF: [22, -88], eF: [8, -82] });
+
+function addPuddle(x) {
+  puddles.push({ id: nextId++, x, w: 120 + Math.random() * 70 });
+}
+
+function splash(x) {
+  SND.splash();
+  note(5 + ((Math.random() * 4) | 0), 0.5, 0.16, 'sine');
+  setTimeout(() => SND.cheer(), 120);
+  for (let i = 0; i < 30; i++) {
+    const s = 4 + Math.random() * 5;
+    bits.push({ x: x + (Math.random() - 0.5) * 40, y: -6, vx: (Math.random() - 0.5) * 300, vy: -(160 + Math.random() * 340), r: 0, vr: (Math.random() - 0.5) * 8, c: i % 3 ? PAL[3] : '#a5d8ff', w: s, h: s * 1.4, g: 700, drag: 0.5, t: 0, life: 0.8 + Math.random() * 0.5 });
+  }
+  ripples.push({ x, t: 0 }, { x, t: -0.18 });
+  kick(30);
+}
+
+function jump() {
+  idle = 0;
+  if (air) {
+    SND.boing(0.8);
+    jy = Math.min(jy, jy);
+    airT = Math.max(0, airT - 0.25);
+    bits.push({ x: fx, y: jy - 60, vx: 0, vy: -60, r: 0, vr: 5, c: PAL[1], t: 0, life: 0.5, w: 7, h: 5, g: 0, drag: 2 });
+    return;
+  }
+  // gently steer the landing into the puddle that will be nearest then
+  let best = null, bd = 1e9;
+  for (const p of puddles) {
+    const pred = p.x - SPEED * AIR;
+    if (pred > HOME - 70 && pred < HOME + 150 && Math.abs(pred - HOME) < bd) {
+      bd = Math.abs(pred - HOME);
+      best = pred;
+    }
+  }
+  fromX = fx;
+  toX = best ?? HOME;
+  air = true;
+  airT = 0;
+  SND.boing(0.4);
+  dust(fx, 0, 30, 4);
+  wobble.hit('fig', -5);
+  me.clear();
+  me.push({ pose: P.crouch, d: 0.06 }, { pose: P.leap, d: 0.22, ez: 'out' });
+}
+
+function land() {
+  air = false;
+  jy = 0;
+  fx = toX;
+  const p = puddles.find((q) => Math.abs(q.x - fx) < q.w / 2);
+  me.clear();
+  wobble.hit('fig', -10);
+  if (p) {
+    splash(fx);
+    wobble.hit(p.id, 8);
+    happy = 1.2;
+    me.push({ pose: P.cheer, d: 0.15, ez: 'out' }, { pose: P.leap, d: 0.2 }, { pose: P.cheer, d: 0.2 }, { pose: P.leap, d: 0.2 }, { pose: P.cheer, d: 0.25 });
+  } else {
+    SND.tok(0.8);
+    note((Math.random() * 5) | 0, 0.3, 0.12, 'sine');
+    dust(fx, 0, 40, 6);
+    me.push({ pose: P.crouch, d: 0.06 });
+  }
+}
+
+const hash = (k) => Math.abs(Math.sin(k * 127.1) * 43758.5) % 1;
+
+function cloud(x, y, s) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.beginPath();
+  ctx.arc(-28, 0, 14, Math.PI * 0.5, Math.PI * 1.5);
+  ctx.arc(-8, -12, 18, Math.PI * 1.05, Math.PI * 1.85);
+  ctx.arc(20, -6, 15, Math.PI * 1.4, Math.PI * 2.5);
+  ctx.closePath();
+  inkShape('#fff', 2.4);
+  ctx.restore();
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -440, y1: 40, minW: 440, focusX: 40 },
+  setup() {
+    addPuddle(130);
+    addPuddle(520);
+  },
+  down() {
+    jump();
+  },
+  update(dt) {
+    me.update(dt);
+    const R = screenRect();
+    sc += SPEED * dt;
+    idle += dt;
+    happy = Math.max(0, happy - dt);
+    if (idle > 6) {
+      jump();
+    }
+    for (const p of puddles) {
+      p.x -= SPEED * dt;
+    }
+    puddles = puddles.filter((p) => p.x > R.l - 160);
+    const lastX = puddles.reduce((m, p) => Math.max(m, p.x), -1e9);
+    if (lastX < R.r + 100) {
+      addPuddle(Math.max(R.r + 150, lastX + 300 + Math.random() * 160));
+    }
+    if (air) {
+      airT += dt;
+      const k = Math.min(1, airT / AIR);
+      jy = -(VJ * airT - 0.5 * GJ * airT * airT);
+      fx = lerp(fromX, toX, EASE.soft(k));
+      if (airT >= AIR) {
+        land();
+      }
+    } else {
+      fx += (HOME - fx) * Math.min(1, dt * 3);
+      if (me.idle) {
+        me.push({ pose: runA, d: 0.14 }, { pose: runB, d: 0.14 });
+      }
+      dustIn -= dt;
+      if (dustIn <= 0) {
+        dustIn = 0.28;
+        dust(fx - 8, 0, 12, 1);
+      }
+      const inP = puddles.find((q) => Math.abs(q.x - fx) < q.w / 2);
+      rippleIn -= dt;
+      if (inP && rippleIn <= 0) {
+        rippleIn = 0.3;
+        ripples.push({ x: fx, t: 0 });
+        for (let i = 0; i < 2; i++) {
+          bits.push({ x: fx + 10, y: -4, vx: 30 + Math.random() * 60, vy: -90 - Math.random() * 60, r: 0, vr: 3, c: PAL[3], t: 0, life: 0.5, w: 4, h: 5, g: 500, drag: 1 });
+        }
+      }
+    }
+    for (const r of ripples) {
+      r.t += dt;
+    }
+    ripples = ripples.filter((r) => r.t < 1);
+  },
+  draw(R) {
+    // clouds (slow parallax)
+    for (let k = Math.floor((R.l + sc * 0.15) / 330) - 1; k < (R.r + sc * 0.15) / 330 + 1; k++) {
+      cloud(k * 330 - sc * 0.15 + 60, -300 + hash(k) * 60, 1 + hash(k + 9) * 0.5);
+    }
+    groundLine();
+    // ground ticks and grass tufts scrolling by
+    ctx.strokeStyle = COL.ink;
+    ctx.lineCap = 'round';
+    for (let k = Math.floor((R.l + sc) / 90) - 1; k < (R.r + sc) / 90 + 1; k++) {
+      const x = k * 90 - sc + hash(k) * 50;
+      if (puddles.some((p) => Math.abs(p.x - x) < p.w / 2 + 14)) {
+        continue;
+      }
+      if (k % 2) {
+        ctx.lineWidth = 2;
+        line(x - 5, 0, x - 8, -9);
+        line(x, 0, x, -12);
+        line(x + 5, 0, x + 8, -9);
+      } else {
+        ctx.lineWidth = 2.4;
+        line(x, 16 + hash(k + 3) * 10, x + 12, 16 + hash(k + 3) * 10);
+      }
+    }
+    // puddles
+    for (const p of puddles) {
+      const rx = p.w / 2, k = 1 + wobble.get(p.id);
+      ctx.save();
+      ctx.translate(p.x, 7);
+      ctx.scale(1 / k, k);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, 8, 0, 0, Math.PI * 2);
+      inkShape(PAL[3], 2.8);
+      ctx.strokeStyle = 'rgba(255,255,255,.85)';
+      ctx.lineWidth = 2.4;
+      for (let i = 0; i < 2; i++) {
+        const f = (clock * 0.5 + i * 0.5 + p.id * 0.3) % 1;
+        ctx.globalAlpha = 1 - f;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rx * (0.15 + 0.7 * f), 8 * (0.15 + 0.7 * f), 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+    for (const r of ripples) {
+      if (r.t < 0) {
+        continue;
+      }
+      ctx.strokeStyle = COL.ink;
+      ctx.globalAlpha = 1 - r.t;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.ellipse(r.x, 7, 20 + r.t * 90, 3 + r.t * 8, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    contactShadow(fx, 18 * (1 + jy / 250), 0.1);
+    const k = 1 + wobble.get('fig');
+    const bob = air ? 0 : -Math.abs(Math.sin(clock * 11)) * 3 - (happy > 0 ? Math.abs(Math.sin(clock * 9)) * 12 : 0);
+    ctx.save();
+    ctx.translate(fx, 0);
+    ctx.scale(1 / k, k);
+    drawFigure(me, 0, 8 + jy + bob, Math.sin(clock * 2) * 1, { scale: 1.1 });
+    ctx.restore();
+    if (happy > 0.4) {
+      ctx.fillStyle = COL.accent;
+      drawStar(fx - 46, -150, 10, clock * 3);
+      ctx.fill();
+      drawStar(fx + 50, -160, 8, -clock * 3);
+      ctx.fill();
+    }
+  },
+});
+</script>
+</body>
+</html>

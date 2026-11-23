@@ -1,0 +1,18 @@
+[
+  { "slug": "pop", "name": "Pop Pop", "color": "#ffd6d1" },
+  { "slug": "boing", "name": "Boing Boing", "color": "#d3f9d8" },
+  { "slug": "fish", "name": "Fish Feed", "color": "#d0ebff" },
+  { "slug": "drum", "name": "Drum Buddy", "color": "#fff3bf" },
+  { "slug": "tower", "name": "Tower Crash", "color": "#ffe8cc" },
+  { "slug": "puddle", "name": "Puddle Splash", "color": "#d0ebff" },
+  { "slug": "peek", "name": "Peekaboo", "color": "#e5dbff" },
+  { "slug": "zoom", "name": "Zoom Zoom", "color": "#fff3bf" },
+  { "slug": "catch", "name": "Snack Catch", "color": "#d3f9d8" },
+  { "slug": "bubbles", "name": "Bubble Blower", "color": "#e5dbff" },
+  { "slug": "float", "name": "Keep It Floating", "color": "#ffd6d1" },
+  { "slug": "splat", "name": "Splat Paint", "color": "#ffdeeb" },
+  { "slug": "dance", "name": "Dance Party", "color": "#ffdeeb" },
+  { "slug": "shapes", "name": "Shape Home", "color": "#ffe8cc" },
+  { "slug": "count", "name": "Count Hop", "color": "#d3f9d8" },
+  { "slug": "sleepy", "name": "Sleepy Time", "color": "#d0d7f5" }
+]

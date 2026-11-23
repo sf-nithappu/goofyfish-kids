@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Drum Buddy</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Drum Buddy: tap the left, middle or right of the screen (or press keys) to hit kick, snare or hi-hat.
+const S = 1.5, GY = 8;
+const SEAT = mk({ head: [2, -96], chest: [0, -71], hip: [0, -38], fF: [30, -8], fB: [20, -8], hF: [16, -58], hB: [10, -56] });
+// drum i: hit point in the world, and where the figure sits to reach it (face -1 = looks left)
+const DRUMS = [
+  { x: -150, hit: [-148, -112], fx: -100, face: -1 },
+  { x: 0, hit: [4, -92], fx: -38, face: 1 },
+  { x: 150, hit: [150, -122], fx: 100, face: 1 },
+];
+const me = new Actor(SEAT);
+let figX = -38, figTX = -38, face = 1, nextKey = 0, lastHit = 0, stickCol = '#ffc078';
+const notes = [];
+
+function seatPose(hF, lean) {
+  return mk({ head: [2 + lean, -96], chest: [lean * 0.6, -71], hip: [0, -38], fF: [30, -8], fB: [20, -8], hF, hB: [10, -56] }, SEAT);
+}
+function hit(i) {
+  const d = DRUMS[i];
+  figTX = d.fx;
+  face = d.face;
+  lastHit = i;
+  const sx = (d.hit[0] - d.fx) * d.face / S;
+  const tgt = [sx, (d.hit[1] - 14 - GY) / S];
+  const up = [Math.max(6, sx * 0.55), tgt[1] - 30];
+  me.clear();
+  me.push({ pose: seatPose(up, 1), d: 0.06, ez: 'out' }, { pose: seatPose(tgt, 3), d: 0.07, ez: 'in' }, { pose: seatPose([16, -58], 0), d: 0.28 });
+  SND.drum(i);
+  wobble.hit('d' + i, 7);
+  confetti(d.hit[0], d.hit[1], 7);
+  const n = 2 + (Math.random() < 0.5 ? 1 : 0);
+  for (let k = 0; k < n; k++) {
+    notes.push({ x: d.hit[0] + (Math.random() - 0.5) * 40, y: d.hit[1] - 10, vx: (Math.random() - 0.5) * 60, vy: -(80 + Math.random() * 60), t: 0, life: 1.4, c: PAL[(Math.random() * PAL.length) | 0] });
+  }
+  if (i === 1) {
+    note(2 + ((Math.random() * 3) | 0), 0.25, 0.06, 'sine');
+  }
+}
+function drawNote(n) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, 1 - n.t / n.life);
+  ctx.translate(n.x, n.y);
+  ctx.rotate(Math.sin(n.t * 5) * 0.25);
+  ctx.strokeStyle = COL.ink;
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  line(7, 0, 7, -26);
+  line(7, -26, 18, -18);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 8, 6, -0.4, 0, Math.PI * 2);
+  inkShape(n.c, 2.2);
+  ctx.restore();
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -240, y1: 40, minW: 460, focusX: 0 },
+  down(x) {
+    const R = screenRect();
+    const l = Math.max(R.l, VIEW.x0), r = Math.min(R.r, VIEW.x1);
+    const t = (x - l) / (r - l);
+    hit(t < 1 / 3 ? 0 : t < 2 / 3 ? 1 : 2);
+  },
+  key(code, down) {
+    if (!down) {
+      return false;
+    }
+    hit(nextKey++ % 3);
+    return true;
+  },
+  update(dt) {
+    me.update(dt);
+    figX += (figTX - figX) * Math.min(1, dt * 9);
+    for (let i = notes.length - 1; i >= 0; i--) {
+      const n = notes[i];
+      n.t += dt;
+      n.x += n.vx * dt;
+      n.y += n.vy * dt;
+      n.vy *= 1 - dt * 0.8;
+      if (n.t > n.life) {
+        notes.splice(i, 1);
+      }
+    }
+  },
+  draw(R) {
+    groundLine();
+    // stool
+    ctx.save();
+    ctx.translate(figX, 0);
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    line(-14, -38, -18, 0);
+    line(14, -38, 18, 0);
+    roundRect(-24, -48, 48, 11, 4);
+    inkShape(PAL[4], 2.4);
+    ctx.restore();
+    contactShadow(figX, 30, 0.1);
+    const sway = Math.sin(clock * 3.2);
+    const wx = (a) => a;
+    const lean = lastHit; // unused, keeps the pose steady
+    drawFigure(me, figX, GY, sway * 1.2, {
+      scale: S, flip: face < 0, rot: sway * 0.04, pivot: [0, -38],
+      over(J) {
+        for (const [h, e] of [[J.handF, J.eF], [J.handB, J.eB]]) {
+          const dx = h[0] - e[0], dy = h[1] - e[1], l = Math.hypot(dx, dy) || 1;
+          inkBar(h[0], h[1], h[0] + (dx / l) * 20, h[1] + (dy / l) * 20, 2.6, stickCol);
+        }
+      },
+    });
+    // kick
+    let k = 1 + wobble.get('d0');
+    ctx.save();
+    ctx.translate(-150, 0);
+    ctx.scale(1 / k, k);
+    for (const sx of [-1, 1]) {
+      inkBar(sx * 38, -6, sx * 56, 0, 4, PAL[4]);
+    }
+    ctx.beginPath();
+    ctx.arc(0, -60, 58, 0, Math.PI * 2);
+    inkShape(PAL[0], 3);
+    ctx.beginPath();
+    ctx.arc(0, -60, 38, 0, Math.PI * 2);
+    inkShape('#fff', 2.4);
+    ctx.fillStyle = PAL[1];
+    drawStar(0, -60, 22, 0);
+    inkShape(PAL[1], 2);
+    ctx.restore();
+    // snare
+    k = 1 + wobble.get('d1');
+    ctx.save();
+    ctx.translate(0, 0);
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    line(-24, -50, -34, 0);
+    line(24, -50, 34, 0);
+    ctx.translate(0, -50);
+    ctx.scale(1 / k, k);
+    roundRect(-46, -34, 92, 34, 6);
+    inkShape(PAL[3], 3);
+    ctx.strokeStyle = COL.ink;
+    for (let x = -34; x <= 34; x += 17) {
+      line(x, -34, x + 8, 0);
+    }
+    ctx.beginPath();
+    ctx.ellipse(0, -34, 46, 10, 0, 0, Math.PI * 2);
+    inkShape('#fff', 3);
+    ctx.restore();
+    // hi-hat
+    k = wobble.get('d2');
+    ctx.save();
+    ctx.translate(150, 0);
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    line(0, -112, 0, -4);
+    line(0, -4, -26, 0);
+    line(0, -4, 26, 0);
+    ctx.translate(0, -112);
+    ctx.rotate(k * 1.2 + Math.sin(clock * 2) * 0.02);
+    ctx.beginPath();
+    ctx.ellipse(0, 6, 40, 7, 0, 0, Math.PI * 2);
+    inkShape(PAL[1], 2.6);
+    ctx.beginPath();
+    ctx.ellipse(0, -2, 40, 7, 0, 0, Math.PI * 2);
+    inkShape('#ffe08a', 2.6);
+    ctx.restore();
+    for (const n of notes) {
+      drawNote(n);
+    }
+  },
+});
+</script>
+</body>
+</html>

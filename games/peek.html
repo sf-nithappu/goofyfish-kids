@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Peekaboo</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Peekaboo: tap a box, curtain, door or dome. It opens with a pop and a surprise appears. Nothing is ever wrong.
+const me = new Actor(P.ready);
+const FIG_Y = 52;
+let hiders = [], bag = [], nextId = 1, idle = 0, jy = 0, jv = 0, figX = 0, jiggleIn = 1.5;
+
+const nextSurprise = () => {
+  if (!bag.length) {
+    bag = [0, 1, 2, 3, 4, 5, 6, 7].sort(() => Math.random() - 0.5);
+  }
+  return bag.pop();
+};
+
+// ── Surprises, drawn around (0,0), about 96 units wide ──
+const SURP = [
+  (t) => { // duck
+    ctx.translate(-8, 4);
+    ctx.beginPath();
+    ctx.moveTo(-36, 0); ctx.lineTo(-52, -16); ctx.lineTo(-30, -12); ctx.closePath();
+    inkShape('#ffe066', 2.6);
+    ctx.beginPath(); ctx.ellipse(0, 10, 40, 28, 0, 0, 7); inkShape('#ffe066', 3);
+    ctx.beginPath(); ctx.arc(22, -22, 20, 0, 7); inkShape('#ffe066', 3);
+    ctx.beginPath(); ctx.moveTo(39, -28); ctx.lineTo(60, -20); ctx.lineTo(39, -13); ctx.closePath(); inkShape('#ff922b', 2.6);
+    ctx.fillStyle = COL.ink; ctx.beginPath(); ctx.arc(28, -28, 3.6, 0, 7); ctx.fill();
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 2.6; ctx.beginPath(); ctx.arc(-6, 8, 16, 0.2 * Math.PI, 1.1 * Math.PI); ctx.stroke();
+  },
+  (t) => { // ice cream
+    ctx.translate(0, -6);
+    ctx.beginPath(); ctx.moveTo(-24, 0); ctx.lineTo(24, 0); ctx.lineTo(0, 56); ctx.closePath(); inkShape('#ffc078', 3);
+    ctx.lineWidth = 1.6; line(-12, 4, 8, 34); line(12, 4, -8, 34);
+    ctx.beginPath(); ctx.arc(0, -10, 27, 0, 7); inkShape(PAL[5], 3);
+    ctx.beginPath(); ctx.arc(-1, -36, 21, 0, 7); inkShape(PAL[2], 3);
+    ctx.lineWidth = 2; line(0, -56, 6, -66);
+    ctx.beginPath(); ctx.arc(7, -65, 7, 0, 7); inkShape('#ff6b6b', 2.4);
+  },
+  (t) => { // goofy goon blob
+    ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(0, -48); ctx.strokeStyle = COL.ink; ctx.lineWidth = 2.4; ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, -52, 6, 0, 7); inkShape(PAL[0], 2.4);
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(s * 18, 42, 13, 7, 0, 0, 7); inkShape(PAL[4], 2.6); }
+    ctx.beginPath(); ctx.ellipse(0, 6, 42, 38, 0, 0, 7); inkShape(PAL[4], 3);
+    for (const [ex, ey, r] of [[-16, -8, 14], [17, -12, 12]]) {
+      ctx.beginPath(); ctx.arc(ex, ey, r, 0, 7); inkShape('#fff', 2.4);
+      ctx.fillStyle = COL.ink; ctx.beginPath(); ctx.arc(ex + Math.cos(t * 4 + ex) * 4, ey + Math.sin(t * 5 + ex) * 4, r * 0.45, 0, 7); ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(0, 16, 16, 0, Math.PI); ctx.closePath(); inkShape('#ff8a80', 2.4);
+    ctx.lineWidth = 2; line(-6, 17, -6, 22); line(6, 17, 6, 22);
+  },
+  (t) => { // star
+    drawStar(0, 0, 54, 0); inkShape('#ffd43b', 3);
+    ctx.fillStyle = COL.ink; ctx.beginPath(); ctx.arc(-10, -4, 4, 0, 7); ctx.arc(10, -4, 4, 0, 7); ctx.fill();
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(0, 2, 11, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+    ctx.fillStyle = PAL[0]; ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(-20, 6, 5, 0, 7); ctx.arc(20, 6, 5, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+  },
+  (t) => { // cake
+    ctx.translate(0, 2);
+    ctx.beginPath(); roundRect(-44, 8, 88, 32, 6); inkShape(PAL[5], 3);
+    ctx.beginPath(); roundRect(-30, -18, 60, 28, 6); inkShape('#fff3bf', 3);
+    ctx.beginPath(); for (let i = 0; i < 4; i++) { ctx.arc(-33 + i * 22, 8, 11, 0, Math.PI); } inkShape('#fff', 2.4);
+    ctx.beginPath(); roundRect(-4, -42, 8, 24, 2); inkShape(PAL[3], 2.4);
+    ctx.beginPath(); ctx.ellipse(0, -50, 5, 8 + Math.sin(t * 12) * 1.5, 0, 0, 7); inkShape('#ffa94d', 2);
+    ctx.lineWidth = 4; ctx.strokeStyle = COL.ink; line(-54, 44, 54, 44);
+  },
+  (t) => { // cat face
+    for (const s of [-1, 1]) {
+      ctx.beginPath(); ctx.moveTo(s * 38, -8); ctx.lineTo(s * 32, -52); ctx.lineTo(s * 8, -32); ctx.closePath(); inkShape('#ffc078', 3);
+      ctx.beginPath(); ctx.moveTo(s * 30, -20); ctx.lineTo(s * 28, -40); ctx.lineTo(s * 16, -30); ctx.closePath(); inkShape(PAL[5], 1.5);
+    }
+    ctx.beginPath(); ctx.ellipse(0, 0, 44, 36, 0, 0, 7); inkShape('#ffc078', 3);
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    line(0, -34, 0, -24); line(-9, -33, -7, -24); line(9, -33, 7, -24);
+    if (t % 3 < 0.14) { line(-21, -3, -9, -3); line(9, -3, 21, -3); }
+    else { ctx.fillStyle = COL.ink; ctx.beginPath(); ctx.arc(-15, -3, 5.5, 0, 7); ctx.arc(15, -3, 5.5, 0, 7); ctx.fill(); }
+    ctx.beginPath(); ctx.moveTo(-5, 8); ctx.lineTo(5, 8); ctx.lineTo(0, 14); ctx.closePath(); inkShape(PAL[0], 2);
+    ctx.beginPath(); ctx.arc(-6, 16, 6, 0, Math.PI); ctx.arc(6, 16, 6, 0, Math.PI); ctx.stroke();
+    ctx.lineWidth = 1.8; line(-28, 8, -56, 2); line(-28, 14, -56, 16); line(28, 8, 56, 2); line(28, 14, 56, 16);
+  },
+  (t) => { // sun
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * 6.283 + t * 0.8;
+      inkBar(Math.cos(a) * 40, Math.sin(a) * 40, Math.cos(a) * 56, Math.sin(a) * 56, 5, '#ffd43b');
+    }
+    ctx.beginPath(); ctx.arc(0, 0, 36, 0, 7); inkShape('#ffd43b', 3);
+    ctx.fillStyle = COL.ink; ctx.beginPath(); ctx.arc(-12, -6, 4, 0, 7); ctx.arc(12, -6, 4, 0, 7); ctx.fill();
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 2.8; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(0, 2, 15, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+  },
+  (t) => { // balloon bunch
+    const bs = [[-28, -22, PAL[0]], [2, -38, PAL[3]], [30, -20, PAL[2]]];
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 1.8; ctx.lineCap = 'round';
+    bs.forEach(([x, y], i) => { const sw = Math.sin(t * 2 + i) * 3; ctx.beginPath(); ctx.moveTo(0, 48); ctx.quadraticCurveTo(x * 0.3, 20, x + sw, y + 26); ctx.stroke(); });
+    bs.forEach(([x, y, c], i) => {
+      const sw = Math.sin(t * 2 + i) * 3;
+      ctx.beginPath(); ctx.ellipse(x + sw, y, 21, 25, 0, 0, 7); inkShape(c, 3);
+      ctx.beginPath(); ctx.moveTo(x + sw - 4, y + 25); ctx.lineTo(x + sw + 4, y + 25); ctx.lineTo(x + sw, y + 31); ctx.closePath(); inkShape(c, 2);
+      ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x + sw, y, 14, Math.PI * 1.15, Math.PI * 1.4); ctx.stroke();
+      ctx.strokeStyle = COL.ink; ctx.lineWidth = 1.8;
+    });
+    ctx.beginPath(); ctx.moveTo(0, 48); ctx.lineTo(-10, 44); ctx.lineTo(-10, 54); ctx.closePath(); ctx.moveTo(0, 48); ctx.lineTo(10, 44); ctx.lineTo(10, 54); ctx.closePath(); inkShape(PAL[1], 2);
+  },
+];
+
+function drawSurprise(i, x, y, s, o) {
+  ctx.save();
+  ctx.translate(x, y + Math.sin(clock * 6 + i) * 2);
+  ctx.rotate(Math.sin(clock * 4 + i) * 0.07);
+  ctx.scale(s, s);
+  SURP[i](clock);
+  ctx.restore();
+}
+
+function layout() {
+  const narrow = innerWidth < innerHeight || innerWidth < 700;
+  const n = narrow ? 3 : 4;
+  const sp = narrow ? 134 : 150;
+  const types = [0, 1, 2, 3].sort(() => Math.random() - 0.5).slice(0, n);
+  const cols = [PAL[0], PAL[3], PAL[2], PAL[4], PAL[1], PAL[5]].sort(() => Math.random() - 0.5);
+  hiders = types.map((t, i) => ({
+    id: nextId++, type: t, x: (i - (n - 1) / 2) * sp, w: Math.min(108, sp - 28), h: [132, 190, 205, 150][t],
+    col: cols[i], o: 0, ov: 0, open: false, hold: 0, s: 0,
+  }));
+  hiders.forEach((h) => (h.sc = h.type === 0 ? 1.15 : clamp((h.w - 12) / 96, 0.7, 1.1)));
+  figX = narrow ? sp / 2 : 0;
+}
+
+function openHider(h) {
+  h.open = true;
+  h.hold = 2.6;
+  h.s = nextSurprise();
+  SND.boing(Math.random());
+  note((Math.random() * 8) | 0, 0.5, 0.16, 'triangle');
+  setTimeout(() => SND.pop((Math.random() * 6) | 0), 90);
+  wobble.hit(h.id, 8);
+  confetti(h.x, -h.h - 20, 26);
+  burst(h.x, -h.h, 6);
+  hop(true);
+}
+function closeHider(h) {
+  h.open = false;
+  wobble.hit(h.id, 5);
+  SND.tok(0.7);
+}
+function hop(big) {
+  jv = big ? -430 : -260;
+  me.clear();
+  me.push({ pose: P.cheer, d: 0.15, ez: 'out' }, { pose: P.leap, d: 0.25 }, { pose: P.cheer, d: 0.25 }, { pose: P.ready, d: 0.4 });
+  if (big) {
+    setTimeout(() => SND.cheer(), 200);
+  }
+}
+
+function drawHider(h) {
+  const k = 1 + wobble.get(h.id), o = h.o, w = h.w, H = h.h, sc = h.sc;
+  const co = clamp(o, 0, 1.1);
+  const show = o > 0.03;
+  ctx.save();
+  ctx.translate(h.x, 0);
+  ctx.scale(1 / k, k);
+  if (h.type === 0) {
+    const bh = H - 26;
+    if (show) { drawSurprise(h.s, 0, lerp(-bh * 0.35, -bh - 34, co), sc); }
+    ctx.beginPath(); roundRect(-w / 2, -bh, w, bh, 6); inkShape(h.col, 3);
+    ctx.beginPath(); roundRect(-9, -bh, 18, bh, 2); inkShape('#fff', 2);
+    ctx.save();
+    ctx.translate(o * 36, -bh - 13 - o * 46);
+    ctx.rotate(o * 0.55);
+    ctx.beginPath(); roundRect(-w / 2 - 6, -13, w + 12, 26, 6); inkShape(h.col, 3);
+    ctx.beginPath(); roundRect(-9, -13, 18, 26, 2); inkShape('#fff', 2);
+    ctx.restore();
+  } else if (h.type === 1) {
+    ctx.beginPath(); roundRect(-w / 2, -H, w, H, 4); inkShape('#fff6d6', 3);
+    if (show) { drawSurprise(h.s, 0, -H * 0.45, sc * (0.5 + 0.5 * co)); }
+    const pw = (w / 2) * (1 - 0.82 * clamp(o, 0, 1)) + 1;
+    for (const s of [-1, 1]) {
+      const x0 = s < 0 ? -w / 2 : w / 2 - pw;
+      ctx.beginPath(); roundRect(x0, -H, pw, H, 4); inkShape(h.col, 3);
+      ctx.strokeStyle = COL.ink; ctx.lineWidth = 1.6;
+      line(x0 + pw * 0.33, -H + 8, x0 + pw * 0.33, -6); line(x0 + pw * 0.66, -H + 8, x0 + pw * 0.66, -6);
+    }
+    inkBar(-w / 2 - 10, -H - 8, w / 2 + 10, -H - 8, 6, '#ffd43b');
+  } else if (h.type === 2) {
+    ctx.beginPath(); roundRect(-w / 2 - 7, -H - 7, w + 14, H + 7, 12); inkShape('#ffe8cc', 3);
+    ctx.beginPath(); roundRect(-w / 2, -H, w, H, 8); inkShape('#fffbe6', 2.5);
+    if (show) {
+      ctx.save(); ctx.beginPath(); roundRect(-w / 2, -H, w, H, 8); ctx.clip();
+      drawSurprise(h.s, 0, -H * 0.45, sc * (0.6 + 0.4 * co));
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.translate(-w / 2, 0);
+    ctx.scale(1 - 0.86 * clamp(o, 0, 1), 1);
+    ctx.beginPath(); roundRect(0, -H, w, H, 8); inkShape(h.col, 3);
+    ctx.beginPath(); roundRect(12, -H + 18, w - 24, H * 0.32, 5); ctx.strokeStyle = COL.ink; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(w - 14, -H * 0.45, 5.5, 0, 7); inkShape('#ffd43b', 2);
+    ctx.restore();
+  } else {
+    const dh = H;
+    if (show) { drawSurprise(h.s, 0, -10 - 48 * sc, sc); }
+    ctx.beginPath(); roundRect(-w / 2 - 10, -10, w + 20, 10, 5); inkShape('#e9ecef', 3);
+    ctx.save();
+    ctx.translate(o * w * 0.85, -o * dh * 0.5 - 10);
+    ctx.rotate(o * 0.5);
+    ctx.translate(0, 10);
+    ctx.beginPath(); ctx.ellipse(0, -10, w / 2, dh - 10, 0, Math.PI, 0); ctx.closePath(); inkShape(h.col, 3);
+    ctx.beginPath(); ctx.arc(0, -dh, 8, 0, 7); inkShape('#fff', 2.4);
+    ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.ellipse(0, -10, w / 2 - 12, dh - 28, 0, Math.PI * 1.1, Math.PI * 1.3); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -440, y1: 60, minW: 440, focusX: 0 },
+  setup: layout,
+  down(x, y) {
+    idle = 0;
+    const h = hiders.find((q) => Math.abs(x - q.x) < q.w / 2 + 16 && y > -q.h - 30 && y < 24);
+    if (!h) {
+      SND.tok(0.6);
+      note((Math.random() * 6) | 0, 0.3, 0.12, 'sine');
+      burst(x, y, 5);
+      confetti(x, y, 5);
+      hop(false);
+      const c = hiders.reduce((a, b) => (Math.abs(b.x - x) < Math.abs(a.x - x) ? b : a));
+      wobble.hit(c.id, 3);
+    } else if (!h.open) {
+      openHider(h);
+    } else {
+      h.hold = Math.max(h.hold, 2) + 0.6;
+      wobble.hit(h.id, 6);
+      note((Math.random() * 8) | 0, 0.4, 0.16, 'triangle');
+      SND.boing(0.3);
+      confetti(h.x, -h.h - 20, 10);
+      hop(false);
+    }
+  },
+  update(dt) {
+    me.update(dt);
+    idle += dt;
+    jy += jv * dt;
+    jv += 1300 * dt;
+    if (jy > 0) {
+      jy = 0;
+      jv = 0;
+    }
+    for (const h of hiders) {
+      const a = ((h.open ? 1 : 0) - h.o) * 260 - h.ov * 16;
+      h.ov += a * dt;
+      h.o += h.ov * dt;
+      if (h.o < 0) {
+        h.o = 0;
+        h.ov = 0;
+      }
+      if (h.open) {
+        h.hold -= dt;
+        if (h.hold <= 0) {
+          closeHider(h);
+        }
+      }
+    }
+    jiggleIn -= dt;
+    if (jiggleIn <= 0) {
+      jiggleIn = 1.2 + Math.random() * 1.5;
+      const c = hiders.filter((h) => !h.open);
+      if (c.length) {
+        wobble.hit(c[(Math.random() * c.length) | 0].id, 2.5);
+      }
+    }
+    if (idle > 5) {
+      idle = 2.5;
+      const c = hiders.filter((h) => !h.open);
+      if (c.length) {
+        openHider(c[(Math.random() * c.length) | 0]);
+      }
+    }
+  },
+  draw() {
+    groundLine();
+    for (const h of hiders) {
+      contactShadow(h.x, h.w * 0.5, 0.08);
+      drawHider(h);
+    }
+    contactShadow(figX, 18 * (1 + jy / 300), 0.1, FIG_Y);
+    drawFigure(me, figX, FIG_Y + 8 + jy, Math.sin(clock * 2) * 1.2, { scale: 0.95 });
+  },
+});
+</script>
+</body>
+</html>

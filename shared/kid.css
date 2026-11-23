@@ -1,0 +1,54 @@
+@font-face {
+  font-family: 'Balsamiq Sans';
+  src: url('../fonts/balsamiq-sans.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+:root {
+  --ink: #1f2329;
+  --dot: rgba(31, 41, 55, .13);
+  --butter: #fde68a;
+  --butter-hi: #fcd34d;
+  --umber: #78350f;
+  --font: 'Balsamiq Sans', 'Comic Sans MS', ui-rounded, system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; height: 100%; overflow: hidden; color: var(--ink);
+  background-color: #fff;
+  background-image: radial-gradient(circle, var(--dot) 0.8px, transparent 1px);
+  background-size: 24px 24px; background-position: 12px 12px;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent; overscroll-behavior: none;
+  font-family: var(--font); font-weight: 400;
+}
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; outline: none; padding: 0; }
+
+/* Home button: press and hold to leave, so a toddler can't wander off by accident. */
+#home {
+  position: fixed; z-index: 10; width: 76px; height: 76px; border-radius: 50%;
+  top: calc(env(safe-area-inset-top, 0px) + 16px); left: max(16px, env(safe-area-inset-left, 0px));
+  background: #fff; box-shadow: 0 0 0 2px #141414, 0 3px 0 2px #141414; display: grid; place-items: center;
+  opacity: .55; transition: opacity .2s, transform .15s;
+}
+#home:active, #home.holding { opacity: 1; transform: scale(.94); }
+#home svg { width: 40px; height: 40px; position: relative; }
+#home .ring { position: absolute; inset: -6px; width: 88px; height: 88px; transform: rotate(-90deg); pointer-events: none; }
+#home .ring circle { fill: none; stroke: #fcd34d; stroke-width: 6; stroke-linecap: round; stroke-dasharray: 264; stroke-dashoffset: 264; }
+#home.shake { animation: shake .4s; }
+@keyframes shake { 20% { transform: translateX(-5px); } 50% { transform: translateX(5px); } 80% { transform: translateX(-3px); } }
+
+/* Bedtime screen, shown when the parent's timer runs out. */
+#bye {
+  position: fixed; inset: 0; z-index: 50; background: #1b2236; display: none; place-items: center; text-align: center;
+  color: #fde68a;
+}
+#bye.on { display: grid; }
+#bye svg { width: min(46vmin, 320px); height: auto; }
+#bye .unlock { position: absolute; right: 18px; bottom: 18px; width: 64px; height: 64px; border-radius: 50%; background: #2a3550; color: #8a97b8; font-size: 28px; }
+#bye .unlock.holding { background: #fde68a; color: #78350f; }
+.zz { animation: float 3s ease-in-out infinite; transform-origin: center; }
+.zz:nth-child(2) { animation-delay: -1s; }
+.zz:nth-child(3) { animation-delay: -2s; }
+@keyframes float { 0%, 100% { transform: translateY(0); opacity: .5; } 50% { transform: translateY(-8px); opacity: 1; } }

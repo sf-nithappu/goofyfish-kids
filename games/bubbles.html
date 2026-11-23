@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Bubble Blower</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Bubble Blower: hold to blow a bubble that swells, release to let it float away, tap a floating bubble to pop it.
+const SC = 1.15, GROUND = 0, FX = -125, MAXB = 25;
+const BLOW = mk({ head: [6, -121], chest: [2, -96], hF: [32, -108], eF: [16, -94], hB: [-4, -56], eB: [-6, -77] }, P.ready);
+const GLEE = mk({ head: [2, -123], hF: [20, -134], eF: [14, -112], hB: [-16, -130], eB: [-14, -112] }, P.ready);
+const me = new Actor(P.ready);
+let bubbles = [], rings = [], nextId = 1, charge = null, pressed = new Map(), idleT = 0, ringW = [FX + 60, -130], blowT = 0, popCount = 0;
+
+const sizeIdx = (r) => clamp(9 - Math.round(r / 9), 0, 9);
+
+function release(tNow) {
+  if (!charge) {
+    return;
+  }
+  const c = charge;
+  charge = null;
+  addBubble(c.x, c.y, c.r, 28 + Math.random() * 20, -(34 + Math.random() * 14));
+  SND.bubble();
+  me.clear();
+  me.push({ pose: BLOW, d: 0.05 }, { pose: P.ready, d: 0.3 });
+}
+function addBubble(x, y, r, vx, vy) {
+  bubbles.push({ id: 'b' + nextId++, x, y, r, vx, vy, ph: Math.random() * 6, hue: (Math.random() * PAL.length) | 0, born: clock });
+  if (bubbles.length > MAXB) {
+    const o = bubbles.shift();
+    dropBits(o.x, o.y, o.r, 6);
+  }
+}
+function dropBits(x, y, r, n) {
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * 6.28 + Math.random() * 0.5;
+    const sp = 50 + Math.random() * 80 + r;
+    bits.push({ x: x + Math.cos(a) * r * 0.8, y: y + Math.sin(a) * r * 0.8, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 30, r: a, vr: 0, c: PAL[(i + 3) % PAL.length], t: 0, life: 0.6 + Math.random() * 0.4, w: 5, h: 5, g: 260, drag: 2 });
+  }
+}
+function pop(b) {
+  bubbles = bubbles.filter((o) => o !== b);
+  popCount++;
+  SND.pop(sizeIdx(b.r) + (popCount % 2));
+  dropBits(b.x, b.y, b.r, 10 + Math.round(b.r / 8));
+  rings.push({ x: b.x, y: b.y, r: b.r, t: 0 });
+  if (b.r > 45) {
+    confetti(b.x, b.y, 12);
+  }
+  if (popCount % 4 === 0) {
+    me.clear();
+    me.push({ pose: GLEE, d: 0.15, ez: 'out' }, { pose: GLEE, d: 0.3 }, { pose: P.ready, d: 0.3 });
+  }
+}
+
+function startCharge(id) {
+  if (!charge) {
+    charge = { id, r: 12, t: 0, x: 0, y: 0, sIn: 0 };
+    idleT = 0;
+    SND.tok(0.3);
+    me.clear();
+    me.push({ pose: BLOW, d: 0.15, ez: 'out' });
+  }
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -440, y1: 40, minW: 440, focusX: 0 },
+  setup() {
+    for (let i = 0; i < 6; i++) {
+      addBubble(-40 + Math.random() * 260, -60 - Math.random() * 320, 20 + Math.random() * 30, 6 + Math.random() * 14, -(20 + Math.random() * 20));
+    }
+    addEventListener('blur', () => {
+      pressed.clear();
+      release();
+    });
+  },
+  down(x, y, id) {
+    idleT = 0;
+    let best = null, bd = 1e9;
+    for (const b of bubbles) {
+      const d = Math.hypot(b.x - x, b.y - y);
+      if (d < b.r + 30 && d < bd) {
+        best = b;
+        bd = d;
+      }
+    }
+    if (best) {
+      pop(best);
+      return;
+    }
+    pressed.set(id, true);
+    startCharge(id);
+  },
+  up(x, y, id) {
+    if (pressed.delete(id) && charge && charge.id === id) {
+      release();
+    }
+  },
+  key(code, d) {
+    if (d) {
+      pressed.set('k' + code, true);
+      startCharge('k' + code);
+    } else if (pressed.delete('k' + code) && charge && charge.id === 'k' + code) {
+      release();
+    }
+    return true;
+  },
+  update(dt) {
+    me.update(dt);
+    const R = screenRect();
+    idleT += dt;
+    if (charge) {
+      charge.t += dt;
+      charge.r = Math.min(78, 12 + charge.t * 38);
+      charge.x = ringW[0] + charge.r * 0.45;
+      charge.y = ringW[1] - charge.r * 0.8;
+      charge.sIn -= dt;
+      if (charge.sIn <= 0) {
+        charge.sIn = 0.11;
+        partial(260 + charge.r * 7 + Math.random() * 20, 300 + charge.r * 8, 0.14, 0.07, 'sine', 0.35);
+      }
+      if (charge.r >= 78 && !charge.maxed) {
+        charge.maxed = true;
+        wobble.hit('charge', 8);
+      }
+    } else if (idleT > 2.2 && me.idle) {
+      // the figure keeps blowing a few bubbles on his own so the screen is never still
+      idleT = 1.2;
+      me.push({ pose: BLOW, d: 0.2 }, { fn: () => addBubble(ringW[0] + 14, ringW[1] - 20, 16 + Math.random() * 22, 25 + Math.random() * 20, -(30 + Math.random() * 12)) }, { pose: BLOW, d: 0.1 }, { pose: P.ready, d: 0.3 });
+    }
+    for (const b of bubbles) {
+      b.vy += (-46 - b.vy) * 0.4 * dt;
+      b.x += (b.vx + Math.sin(clock * 1.4 + b.ph) * 14) * dt;
+      b.y += b.vy * dt;
+      b.vx *= 1 - 0.3 * dt;
+      if (b.x > R.r - b.r && b.vx > 0) {
+        b.vx = -Math.abs(b.vx);
+      }
+    }
+    // bubbles that float off the top are replaced quietly by the figure
+    bubbles = bubbles.filter((b) => b.y > R.t - 120);
+    if (bubbles.length < 4 && !charge) {
+      addBubble(ringW[0] + 14, ringW[1] - 20, 20 + Math.random() * 25, 25 + Math.random() * 25, -40);
+    }
+    for (const r of rings) {
+      r.t += dt;
+    }
+    rings = rings.filter((r) => r.t < 0.35);
+  },
+  draw(R) {
+    groundLine();
+    contactShadow(FX, 22, 0.1);
+    const J = drawFigure(me, FX, GROUND + 8, Math.sin(clock * 2) * 1.2, {
+      scale: SC,
+      over(J) {
+        const h = J.handF, tip = [h[0] + 11, h[1] - 24];
+        inkBar(h[0], h[1], tip[0], tip[1], 2.4, '#b9b9b9');
+        ctx.beginPath();
+        ctx.arc(tip[0] + 3, tip[1] - 8, 8, 0, 6.3);
+        ctx.strokeStyle = COL.ink;
+        ctx.lineWidth = 3.2;
+        ctx.stroke();
+        ctx.strokeStyle = PAL[3];
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        ringW = [FX + (tip[0] + 3) * SC, GROUND + 8 + (tip[1] - 8) * SC];
+      },
+    });
+    for (const b of bubbles) {
+      drawBubble(b.x, b.y, b.r, b.hue, b.ph, wobble.get(b.id));
+    }
+    if (charge) {
+      drawBubble(charge.x, charge.y, charge.r, 3, 0, wobble.get('charge') + Math.sin(clock * 14) * 0.012);
+    }
+    for (const r of rings) {
+      const k = r.t / 0.35;
+      ctx.globalAlpha = 1 - k;
+      ctx.strokeStyle = PAL[(r.x | 0) % PAL.length];
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, r.r * (1 + k * 0.5), 0, 6.3);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  },
+});
+
+function drawBubble(x, y, r, hue, ph, k) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(1 / (1 + k), 1 + k);
+  const N = 36;
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * 6.2832;
+    const rr = r * (1 + Math.sin(a * 2 + clock * 3 + ph) * 0.035 + Math.sin(a * 3 - clock * 2.3 + ph) * 0.02);
+    pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+  }
+  ctx.beginPath();
+  pts.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](p[0], p[1]));
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(190,225,255,.18)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(20,20,20,.5)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  // rainbow-ish rim: PAL strokes in short arcs
+  ctx.lineWidth = 2.6;
+  ctx.lineCap = 'round';
+  const seg = 6;
+  for (let s = 0; s < seg; s++) {
+    ctx.strokeStyle = PAL[(hue + s) % PAL.length];
+    ctx.beginPath();
+    for (let i = (s * N) / seg; i <= ((s + 1) * N) / seg; i++) {
+      const p = pts[i % N];
+      const q = [p[0] * 0.93, p[1] * 0.93];
+      ctx[i === (s * N) / seg ? 'moveTo' : 'lineTo'](q[0], q[1]);
+    }
+    ctx.stroke();
+  }
+  // shine
+  ctx.strokeStyle = 'rgba(255,255,255,.95)';
+  ctx.lineWidth = Math.max(2.5, r * 0.07);
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.72, Math.PI * 1.1, Math.PI * 1.38);
+  ctx.stroke();
+  ctx.lineWidth = Math.max(2, r * 0.05);
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.72, Math.PI * 1.46, Math.PI * 1.52);
+  ctx.stroke();
+  ctx.restore();
+}
+</script>
+</body>
+</html>

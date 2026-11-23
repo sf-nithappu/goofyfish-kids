@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Zoom Zoom</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Zoom Zoom: hold to drive along a wobbly road, release to coast to a stop, tap to honk.
+// Honking makes the roadside wave, hop and wobble. The scenery loops forever.
+const SEAT = mk({ head: [0, -88], chest: [-2, -63], hip: [-4, -34], fF: [26, -14], fB: [22, -14], kF: [20, -42], kB: [16, -40], hF: [20, -54], eF: [6, -48], hB: [16, -54], eB: [2, -48] });
+const LEAN = mk({ head: [8, -86], chest: [1, -62], hF: [22, -54], hB: [18, -54] }, SEAT);
+const HONK = mk({ head: [2, -90], hF: [14, -98], eF: [12, -78] }, SEAT);
+const me = new Actor(SEAT);
+
+const CAR_X = -70, ROAD_TOP = 14, ROAD_BOT = 72, CAR_BASE = 64, S = 1.35;
+let v = 140, scroll = 0, held = new Set(), items = [], hills = [], clouds = [], puffs = [], nextId = 1;
+let honkT = 0, puffIn = 0, chugIn = 0, sunSpin = 0, lastPose = null;
+
+const rnd = (a, b) => a + Math.random() * (b - a);
+const KINDS = ['cow', 'sheep', 'tree', 'house', 'tree', 'flowers', 'sheep', 'cow', 'house', 'flowers'];
+let kindI = 0;
+function newItem(x) {
+  const kind = KINDS[kindI++ % KINDS.length];
+  const it = { id: 'i' + nextId++, kind, x, s: kind === 'flowers' ? 1 : rnd(1.05, 1.35), react: 0, rd: 0, ph: Math.random() * 6, col: (Math.random() * PAL.length) | 0 };
+  if (kind === 'house') {
+    it.s = rnd(1.1, 1.3);
+  }
+  return it;
+}
+
+function reachEdge() {
+  return screenRect().r;
+}
+
+function honk() {
+  SND.honk();
+  honkT = 0.7;
+  wobble.hit('car', 8);
+  me.clear();
+  me.push({ pose: HONK, d: 0.1, ez: 'out' }, { pose: HONK, d: 0.25 }, { pose: SEAT, d: 0.3 });
+  sunSpin = 1.2;
+  const R = screenRect();
+  let n = 0;
+  for (const it of items) {
+    if (it.x > R.l - 40 && it.x < R.r + 40) {
+      it.react = 1;
+      it.rd = Math.max(0, it.x - CAR_X) / 650;
+      it.sound = n++ < 2;
+    }
+  }
+  wobble.hit('sun', 6);
+  confetti(CAR_X + 90, ROAD_BOT - 40, 8);
+}
+
+function down(x, y, id) {
+  held.add(id);
+  honk();
+}
+function up(x, y, id) {
+  held.delete(id);
+}
+
+// ---- scenery ----
+function drawLoopHills(R) {
+  for (const h of hills) {
+    ctx.beginPath();
+    ctx.ellipse(h.x, 0, h.w, h.h, 0, Math.PI, 0);
+    ctx.closePath();
+    inkShape(h.c, 2);
+  }
+}
+function cloud(c) {
+  const R = screenRect();
+  const corner = 125 / cam.s;
+  if (c.x < R.l + corner + 40 && c.y - 30 < R.t + corner) {
+    return;
+  }
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  ctx.scale(c.s, c.s);
+  const cs = [[-26, 4, 16], [-8, -8, 20], [14, -4, 18], [30, 6, 13], [0, 8, 18]];
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = COL.ink;
+  for (const [x, y, r] of cs) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 6.3);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#fff';
+  for (const [x, y, r] of cs) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 6.3);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function sun(R) {
+  const x = Math.min(R.r, VIEW.x1) - 85, y = -252;
+  const k = 1 + wobble.get('sun') * 1.5;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(k, k);
+  ctx.rotate(clock * 0.3);
+  ctx.strokeStyle = COL.ink;
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 10; i++) {
+    ctx.save();
+    ctx.rotate((i / 10) * Math.PI * 2);
+    ctx.lineWidth = 3;
+    line(0, -40, 0, i % 2 ? -50 : -56);
+    ctx.restore();
+  }
+  ctx.rotate(-clock * 0.3);
+  ctx.beginPath();
+  ctx.arc(0, 0, 32, 0, 6.3);
+  inkShape(PAL[1], 2.6);
+  ctx.fillStyle = COL.ink;
+  ctx.beginPath();
+  ctx.arc(-10, -5, 3, 0, 6.3);
+  ctx.arc(10, -5, 3, 0, 6.3);
+  ctx.fill();
+  ctx.strokeStyle = COL.ink;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  if (sunSpin > 0.3) {
+    ctx.ellipse(0, 9, 8, 6, 0, 0, 6.3);
+  } else {
+    ctx.arc(0, 4, 11, 0.25 * Math.PI, 0.75 * Math.PI);
+  }
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,138,128,.55)';
+  ctx.beginPath();
+  ctx.arc(-19, 7, 5, 0, 6.3);
+  ctx.arc(19, 7, 5, 0, 6.3);
+  ctx.fill();
+  ctx.restore();
+}
+
+function unionCircles(cs, fill, lw) {
+  ctx.strokeStyle = COL.ink;
+  ctx.lineWidth = lw * 2;
+  for (const [x, y, r] of cs) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 6.3);
+    ctx.stroke();
+  }
+  ctx.fillStyle = fill;
+  for (const [x, y, r] of cs) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 6.3);
+    ctx.fill();
+  }
+}
+function eye(x, y, r) {
+  ctx.fillStyle = COL.ink;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, 6.3);
+  ctx.fill();
+}
+
+function dCow(it, w) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = COL.ink;
+  ctx.lineWidth = 5;
+  for (const lx of [-20, -10, 12, 22]) {
+    line(lx, -14, lx, -1);
+  }
+  // tail swings
+  const sw = Math.sin(clock * 3 + it.ph) * 5 + (it.react > 0 ? Math.sin(clock * 18) * 8 : 0);
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(30, -36);
+  ctx.quadraticCurveTo(40 + sw * 0.5, -30, 36 + sw, -14);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(36 + sw, -11, 4, 0, 6.3);
+  inkShape(COL.ink, 1);
+  roundRect(-30, -46, 60, 32, 14);
+  inkShape('#fff', 2.4);
+  ctx.fillStyle = COL.ink;
+  ctx.beginPath();
+  ctx.ellipse(-2, -36, 9, 6, 0.3, 0, 6.3);
+  ctx.ellipse(16, -26, 6, 5, 0, 0, 6.3);
+  ctx.fill();
+  // horns and ears
+  ctx.lineWidth = 3;
+  line(-42, -52, -45, -60);
+  line(-33, -52, -30, -60);
+  roundRect(-56, -48, 28, 26, 10);
+  inkShape('#fff', 2.4);
+  roundRect(-59, -35, 16, 12, 5);
+  inkShape(PAL[5], 2);
+  eye(-47, -41, 2.6);
+  eye(-37, -41, 2.6);
+  eye(-54, -29, 1.4);
+  eye(-48, -29, 1.4);
+}
+function dSheep(it, w) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = COL.ink;
+  ctx.lineWidth = 4;
+  for (const lx of [-14, -6, 8, 16]) {
+    line(lx, -14, lx, -1);
+  }
+  unionCircles([[-14, -30, 13], [0, -38, 15], [14, -30, 13], [0, -24, 15], [-4, -30, 16]], '#fff', 2.2);
+  // head
+  ctx.beginPath();
+  ctx.ellipse(-30, -32, 11, 12, 0, 0, 6.3);
+  inkShape('#6b6b6b', 2.2);
+  ctx.beginPath();
+  ctx.ellipse(-24, -44, 5, 3, 0.4, 0, 6.3);
+  inkShape('#6b6b6b', 1.6);
+  eye(-33, -35, 2.5);
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(-33.8, -35.8, 0.9, 0, 6.3);
+  ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(-34, -26, 3, 0.2, Math.PI - 0.2);
+  ctx.stroke();
+}
+function dTree(it, w) {
+  ctx.rotate(w * 1.1);
+  roundRect(-7, -52, 14, 52, 4);
+  inkShape('#d9b38c', 2.4);
+  unionCircles([[0, -88, 32], [-24, -66, 22], [24, -66, 22], [0, -64, 26]], PAL[2], 2.4);
+  ctx.fillStyle = PAL[0];
+  for (const [x, y] of [[-12, -90], [14, -76], [-26, -64], [4, -60], [26, -62]]) {
+    ctx.beginPath();
+    ctx.arc(x, y, 4.5, 0, 6.3);
+    ctx.fill();
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+}
+function dHouse(it, w) {
+  roundRect(32, -86, 12, 26, 2);
+  inkShape(PAL[4], 2.4);
+  roundRect(-40, -56, 80, 56, 3);
+  inkShape(PAL[6], 2.6);
+  ctx.beginPath();
+  ctx.moveTo(-50, -54);
+  ctx.lineTo(0, -92);
+  ctx.lineTo(50, -54);
+  ctx.closePath();
+  inkShape(PAL[0], 2.6);
+  roundRect(-9, -30, 18, 30, 8);
+  inkShape(PAL[3], 2.2);
+  const blink = it.react > 0 ? PAL[1] : '#fff';
+  for (const sx of [-27, 17]) {
+    roundRect(sx, -44, 14, 14, 2);
+    inkShape(blink, 2);
+    line(sx + 7, -44, sx + 7, -30);
+  }
+  if (it.react > 0) {
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, -15, 2, 0, 6.3);
+    ctx.stroke();
+  }
+}
+function dFlowers(it, w) {
+  ctx.lineCap = 'round';
+  [[-16, 20, 0], [0, 30, 2], [16, 22, 4]].forEach(([x, h, c], i) => {
+    ctx.save();
+    ctx.translate(x, 0);
+    ctx.rotate(w * 2 + Math.sin(clock * 2 + i + it.ph) * 0.05);
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 2.4;
+    line(0, 0, 0, -h);
+    for (let k = 0; k < 5; k++) {
+      ctx.beginPath();
+      ctx.arc(Math.cos(k * 1.257) * 6.5, -h + Math.sin(k * 1.257) * 6.5, 5.2, 0, 6.3);
+      inkShape(PAL[(c + it.col) % PAL.length], 1.6);
+    }
+    ctx.beginPath();
+    ctx.arc(0, -h, 4, 0, 6.3);
+    inkShape('#ffd166', 1.6);
+    ctx.restore();
+  });
+}
+const DRAW = { cow: dCow, sheep: dSheep, tree: dTree, house: dHouse, flowers: dFlowers };
+
+function drawItem(it) {
+  const w = wobble.get(it.id);
+  let hop = 0, sq = 0;
+  if (it.react > 0 && it.rd <= 0 && it.kind !== 'tree' && it.kind !== 'flowers') {
+    const p = 1 - it.react;
+    hop = Math.abs(Math.sin(p * Math.PI * 3)) * 26 * it.react;
+    sq = Math.max(0, -Math.sin(p * Math.PI * 3 + 0.01)) * 0.05;
+  }
+  ctx.save();
+  ctx.translate(it.x, 1 - hop);
+  const idle = 1 + Math.sin(clock * 2 + it.ph) * 0.012;
+  ctx.scale(it.s / (idle + w), it.s * (idle + w) * (1 - sq));
+  DRAW[it.kind](it, w);
+  ctx.restore();
+  if (it.react > 0 && it.rd <= 0 && it.react < 0.9) {
+    ctx.fillStyle = PAL[1];
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, it.react * 2);
+    drawStar(it.x + 4, -100 * it.s - 14 - (1 - it.react) * 22, 8, clock * 3);
+    inkShape(PAL[1], 1.6);
+    ctx.restore();
+  }
+}
+
+function drawRoad(R) {
+  // grass line and road edges that scroll with the wheels
+  const wl = (yy, a, off) => {
+    ctx.beginPath();
+    const x0 = Math.floor((R.l + scroll - 20) / 6) * 6;
+    for (let wx = x0; wx <= R.r + scroll + 20; wx += 6) {
+      const q = WOBBLE[(((wx / 6) | 0) % 512 + 512 + off) % 512];
+      const sx = wx - scroll;
+      ctx[wx === x0 ? 'moveTo' : 'lineTo'](sx, yy + q * a);
+    }
+    ctx.stroke();
+  };
+  ctx.strokeStyle = COL.ink;
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  // road surface
+  ctx.fillStyle = '#ececec';
+  ctx.fillRect(R.l - 20, ROAD_TOP, R.r - R.l + 40, ROAD_BOT - ROAD_TOP);
+  wl(0, 1.4, 0);
+  wl(ROAD_TOP, 1.2, 40);
+  wl(ROAD_BOT, 1.2, 90);
+  // dashes
+  const per = 80;
+  const off = ((scroll % per) + per) % per;
+  for (let x = R.l - per - off; x < R.r + per; x += per) {
+    inkBar(x, 43, x + 34, 43, 4, COL.butterHi);
+  }
+  // little grass tufts and pebbles on the road side
+  ctx.lineWidth = 2;
+  const pe = 130;
+  const po = ((scroll * 1.0 % pe) + pe) % pe;
+  for (let x = R.l - pe - po; x < R.r + pe; x += pe) {
+    const k = Math.floor((x + scroll) / pe);
+    ctx.beginPath();
+    ctx.ellipse(x + 20 + (k % 3) * 8, ROAD_BOT + 12 + (k % 2) * 4, 5, 2.6, 0, 0, 6.3);
+    ctx.stroke();
+  }
+}
+
+function drawCar(R) {
+  const moving = Math.min(1, v / 200);
+  const bob = Math.sin(scroll * 0.11) * 1.8 * moving + Math.sin(clock * 3) * 0.4;
+  const k = wobble.get('car');
+  ctx.save();
+  ctx.translate(CAR_X, CAR_BASE + bob);
+  ctx.scale(S * (1 - k * 0.5), S * (1 + k));
+  contactShadow(0, 66, 0.12, 0);
+  // seat back and steering
+  roundRect(-62, -66, 26, 24, 7);
+  inkShape(PAL[0], 2.4);
+  ctx.lineCap = 'round';
+  inkBar(16, -50, 20, -76, 2.4, '#8d8d8d');
+  // figure sits in the car, rocking a little when going
+  const lean = v > 60 ? LEAN : SEAT;
+  if (lean !== lastPose && me.idle) {
+    me.push({ pose: lean, d: 0.4 });
+    lastPose = lean;
+  }
+  drawFigure(me, -6, -20, Math.sin(clock * 2) * 1.2, { scale: 1.0 });
+  // body
+  roundRect(-62, -50, 124, 28, 11);
+  inkShape(PAL[0], 2.8);
+  roundRect(34, -44, 32, 14, 6);
+  inkShape(PAL[1], 2);
+  ctx.beginPath();
+  ctx.arc(-52, -36, 3.5, 0, 6.3);
+  inkShape(PAL[1], 1.6);
+  // windshield frame
+  ctx.strokeStyle = COL.ink;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(26, -50);
+  ctx.lineTo(34, -70);
+  ctx.lineTo(42, -70);
+  ctx.stroke();
+  // wheels
+  for (const wx of [-36, 36]) {
+    ctx.save();
+    ctx.translate(wx, -17);
+    ctx.beginPath();
+    ctx.arc(0, 0, 17, 0, 6.3);
+    inkShape('#4a4a4a', 2.8);
+    ctx.rotate(scroll / 17);
+    ctx.beginPath();
+    ctx.arc(0, 0, 8, 0, 6.3);
+    inkShape(PAL[1], 2);
+    ctx.lineWidth = 2;
+    line(-8, 0, 8, 0);
+    line(0, -8, 0, 8);
+    ctx.restore();
+  }
+  ctx.restore();
+  // honk rings in front of the car
+  if (honkT > 0) {
+    const p = 1 - honkT / 0.7;
+    ctx.strokeStyle = COL.ink;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const pp = Math.max(0, p - i * 0.12);
+      ctx.globalAlpha = Math.max(0, 1 - pp * 1.3);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(CAR_X + 78 * 1.0, CAR_BASE - 52, 14 + pp * 60, -0.75, 0.75);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawPuffs() {
+  for (const p of puffs) {
+    const a = Math.max(0, 1 - p.t / p.life);
+    ctx.globalAlpha = a * 0.9;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * (0.6 + p.t / p.life), 0, 6.3);
+    inkShape('#fff', 1.8);
+  }
+  ctx.globalAlpha = 1;
+}
+
+kid({
+  view: { x0: -300, x1: 300, y0: -330, y1: 86, minW: 440, focusX: 0 },
+  setup() {
+    const R = screenRect();
+    let x = R.l + 40;
+    while (x < R.r + 200) {
+      items.push(newItem(x));
+      x += rnd(150, 230);
+    }
+    for (let x2 = R.l - 100; x2 < R.r + 400; x2 += 330) {
+      hills.push({ x: x2, w: rnd(150, 220), h: rnd(60, 100), c: ['#e6f9e9', '#fdf1d6', '#e8f2fd'][(Math.random() * 3) | 0] });
+    }
+    for (let i = 0; i < 5; i++) {
+      clouds.push({ x: R.l + i * 190 + 40, y: rnd(-290, -190), s: rnd(0.9, 1.4) });
+    }
+    addEventListener('blur', () => held.clear());
+  },
+  down,
+  up,
+  key(code, isDown) {
+    if (isDown) {
+      down(0, 0, 'k' + code);
+    } else {
+      up(0, 0, 'k' + code);
+    }
+    return true;
+  },
+  update(dt) {
+    me.update(dt);
+    const R = screenRect();
+    const go = held.size > 0;
+    const target = go ? 380 : 0;
+    v += (target - v) * (go ? 1.5 : 1.3) * dt;
+    if (!go && v < 4) {
+      v = 0;
+    }
+    scroll += v * dt;
+    honkT = Math.max(0, honkT - dt);
+    sunSpin = Math.max(0, sunSpin - dt);
+
+    // scenery: near items scroll at full speed, hills slower, clouds drift on their own too
+    for (const it of items) {
+      it.x -= v * dt;
+      if (it.rd > 0) {
+        it.rd -= dt;
+        if (it.rd <= 0) {
+          wobble.hit(it.id, 10);
+          if (it.sound) {
+            if (it.kind === 'cow') {
+              partial(150, 105, 0.5, 0.07, 'sawtooth', 0.3);
+            } else if (it.kind === 'sheep') {
+              partial(420, 380, 0.35, 0.05, 'sawtooth', 0.3);
+            } else {
+              note(it.kind === 'house' ? 5 : 7, 0.4, 0.1, 'sine');
+            }
+          }
+        }
+      } else if (it.react > 0) {
+        it.react -= dt / 0.95;
+      }
+    }
+    items = items.filter((it) => it.x > R.l - 120);
+    let last = items.reduce((m, it) => Math.max(m, it.x), R.l);
+    while (last < R.r + 120) {
+      last += rnd(150, 230);
+      items.push(newItem(last));
+    }
+    for (const h of hills) {
+      h.x -= (v * 0.25 + 3) * dt;
+    }
+    const hl = hills.reduce((m, h) => Math.max(m, h.x), -1e9);
+    for (const h of hills) {
+      if (h.x < R.l - h.w - 60) {
+        h.x = Math.max(hl, R.r) + rnd(240, 330);
+        h.w = rnd(150, 220);
+        h.h = rnd(60, 100);
+      }
+    }
+    for (const c of clouds) {
+      c.x -= (10 + v * 0.1) * dt;
+      if (c.x < R.l - 90) {
+        c.x = R.r + 90 + Math.random() * 100;
+        c.y = rnd(-290, -190);
+      }
+    }
+
+    // dust puffs and a soft engine chug
+    puffIn -= dt;
+    if (v > 40 && puffIn <= 0) {
+      puffIn = 0.16 - v / 3500;
+      puffs.push({ x: CAR_X - 82, y: CAR_BASE - 10 + rnd(-4, 4), r: rnd(5, 8), t: 0, life: rnd(0.5, 0.8), vy: rnd(-25, -8) });
+    }
+    chugIn -= dt;
+    if (v > 40 && chugIn <= 0) {
+      chugIn = 0.34 - v / 1800;
+      partial(78 + v * 0.14 + Math.random() * 10, 60 + v * 0.1, 0.12, 0.06, 'triangle', 0.1);
+    }
+    for (const p of puffs) {
+      p.t += dt;
+      p.x -= (v * 0.9 + 14) * dt;
+      p.y += p.vy * dt;
+    }
+    puffs = puffs.filter((p) => p.t < p.life);
+  },
+  draw(R) {
+    sun(R);
+    for (const c of clouds) {
+      cloud(c);
+    }
+    drawLoopHills(R);
+    drawRoad(R);
+    for (const it of items) {
+      drawItem(it);
+    }
+    drawCar(R);
+    drawPuffs();
+  },
+});
+</script>
+</body>
+</html>
