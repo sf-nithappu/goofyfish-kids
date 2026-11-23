@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Colour Fun</title>
+<link rel="stylesheet" href="../shared/kid.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../shared/shell.js"></script>
+<script src="../shared/core.js"></script>
+<script>
+// Colour Fun: pick a colour from the palette on the side, then tap or drag over a picture to fill each part.
+// Four pictures. Colour them all and a cheer plays, then the next picture appears. Nothing can go wrong.
+
+const FW = 440, FH = 320, OX = -230, OY = -470; // the picture frame in world units (local 0..FW, 0..FH)
+const COLORS = ['#ff6b6b', '#ffa94d', '#ffe066', '#69db7c', '#4dabf7', '#b197fc', '#ff8fc7', '#a9734a'];
+const ERASER = 8, NEXT = 9, SLOTS = 10;
+const WHITE = '#ffffff';
+const scratch = document.createElement('canvas').getContext('2d'); // identity transform, used for hit tests
+
+// ── Shape builders (local picture coordinates) ────────────────────────────
+const mkp = (f) => { const p = new Path2D(); f(p); return p; };
+const Rc = (x, y, w, h) => mkp((p) => p.rect(x, y, w, h));
+const El = (cx, cy, rx, ry) => mkp((p) => p.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2));
+const Ci = (cx, cy, r) => El(cx, cy, r, r);
+const Pg = (pts) => mkp((p) => { p.moveTo(pts[0][0], pts[0][1]); for (const q of pts.slice(1)) p.lineTo(q[0], q[1]); p.closePath(); });
+const Un = (...ps) => mkp((p) => { for (const q of ps) p.addPath(q); }); // only for circles and rects (same winding)
+const Star = (cx, cy, r) => Pg(Array.from({ length: 10 }, (_, i) => { const a = (i / 10) * Math.PI * 2 - Math.PI / 2, rr = i % 2 ? r * 0.45 : r; return [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]; }));
+function rays(cx, cy, r, n) {
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    line(cx + Math.cos(a) * (r + 7), cy + Math.sin(a) * (r + 7), cx + Math.cos(a) * (r + 21), cy + Math.sin(a) * (r + 21));
+  }
+}
+
+const SCENES = [
+  () => ({ // house
+    regions: [Rc(0, 0, FW, FH), El(220, 335, 330, 100), Ci(372, 62, 32), El(116, 60, 50, 24),
+      Rc(336, 190, 18, 62), Ci(345, 170, 46), Rc(226, 92, 22, 46),
+      Rc(110, 150, 150, 102), Pg([[95, 152], [185, 84], [275, 152]]), Rc(170, 190, 36, 62), Rc(125, 170, 32, 30), Rc(222, 170, 30, 30)],
+    deco: () => rays(372, 62, 32, 8),
+  }),
+  () => ({ // fish
+    regions: [Rc(0, 0, FW, FH), El(220, 345, 330, 80), Pg([[60, 305], [48, 262], [64, 222], [50, 182], [72, 218], [58, 262], [78, 305]]),
+      Pg([[380, 305], [368, 262], [384, 222], [370, 182], [392, 218], [378, 262], [398, 305]]), Pg([[298, 150], [372, 96], [372, 204]]),
+      Pg([[170, 104], [210, 56], [236, 104]]), El(205, 152, 98, 60), Ci(150, 136, 16), Ci(155, 136, 7),
+      Pg([[60, 96], [36, 76], [36, 116]]), El(96, 96, 36, 21), Ci(110, 90, 4), Ci(340, 52, 12), Ci(362, 26, 8), Ci(318, 28, 6), Pg([[225, 296], [250, 262], [275, 296]])],
+    deco: () => { line(120, 165, 138, 175); line(205, 120, 205, 190); line(240, 118, 240, 188); },
+  }),
+  () => ({ // rocket
+    regions: [Rc(0, 0, FW, FH), Ci(78, 238, 46), Ci(362, 68, 30), Star(70, 56, 20), Star(150, 34, 14), Star(392, 160, 18), Star(34, 150, 12),
+      Pg([[195, 235], [220, 304], [245, 235]]), Pg([[175, 190], [128, 252], [175, 236]]), Pg([[265, 190], [312, 252], [265, 236]]),
+      Rc(175, 105, 90, 132), Pg([[175, 105], [220, 34], [265, 105]]), Ci(220, 152, 21), Rc(195, 237, 50, 14)],
+    deco: () => { line(60, 238, 98, 218); line(52, 255, 108, 230); },
+  }),
+  () => ({ // caterpillar
+    regions: [Rc(0, 0, FW, FH), El(220, 345, 330, 85), Ci(60, 60, 34), El(220, 262, 160, 28), Ci(384, 66, 30),
+      Ci(110, 220, 34), Ci(172, 205, 36), Ci(236, 205, 36), Ci(300, 215, 34), Ci(362, 195, 42), Ci(376, 183, 9)],
+    deco: () => { rays(60, 60, 34, 8); line(384, 90, 384, 150); line(350, 156, 336, 130); line(374, 156, 380, 128); line(345, 205, 372, 215); },
+  }),
+];
+
+let sceneIdx = 0, scene = null, sel = 2, introT = 0, celebrate = 0, dragFill = null;
+const me = new Actor(P.ready);
+const world = (lx, ly) => [lx + OX, ly + OY];
+
+function loadScene(i) {
+  sceneIdx = ((i % SCENES.length) + SCENES.length) % SCENES.length;
+  scene = SCENES[sceneIdx]();
+  for (const r of scene.regions.map((p, k) => ({ path: p, k }))) {
+    scene.regions[r.k] = { path: r.path, col: WHITE, anim: null };
+  }
+  introT = 0;
+  celebrate = 0;
+}
+
+function hitRegion(x, y) {
+  const lx = x - OX, ly = y - OY;
+  if (lx < 0 || ly < 0 || lx > FW || ly > FH) {
+    return null;
+  }
+  for (let i = scene.regions.length - 1; i >= 0; i--) {
+    if (scratch.isPointInPath(scene.regions[i].path, lx, ly)) {
+      return scene.regions[i];
+    }
+  }
+  return null;
+}
+
+function fillAt(x, y) {
+  const r = hitRegion(x, y);
+  const col = sel === ERASER ? WHITE : COLORS[sel];
+  if (!r) {
+    return false;
+  }
+  const cur = r.anim ? r.anim.col : r.col;
+  if (cur === col) {
+    return false;
+  }
+  r.col = r.anim ? r.anim.col : r.col;
+  r.anim = { x: x - OX, y: y - OY, t: 0, col };
+  SND.pop(sel + Math.floor(Math.random() * 3));
+  hiss(0.14, 0.1, 'bandpass', 1500, 700, 1, 0.1);
+  confetti(x, y, 3);
+  me.clear();
+  me.push({ pose: P.cheer, d: 0.14, ez: 'out' }, { pose: P.ready, d: 0.3 });
+  return true;
+}
+
+// Palette geometry: a strip down the right edge of the screen.
+function palette() {
+  const R = screenRect();
+  const slot = Math.min(58, (R.b - R.t - 70) / SLOTS);
+  const w = slot * 1.3;
+  const cx = R.r - w / 2 - 8;
+  const top = (R.t + R.b) / 2 - (slot * SLOTS) / 2;
+  return { R, slot, w, cx, top, r: slot * 0.42, y: (i) => top + slot * (i + 0.5) };
+}
+
+function paletteHit(x, y) {
+  const p = palette();
+  if (x < p.cx - p.w / 2 - 6) {
+    return -1;
+  }
+  const i = Math.floor((y - p.top) / p.slot);
+  return i >= 0 && i < SLOTS ? i : -2; // -2: on the strip but between slots
+}
+
+kid({
+  view: { x0: -340, x1: 340, y0: -490, y1: 40, minW: 700, focusX: 40 },
+  setup() {
+    loadScene(0);
+  },
+  key(code, down) {
+    if (!down) {
+      return false;
+    }
+    const m = /^Digit([1-8])$/.exec(code);
+    if (m) {
+      sel = Number(m[1]) - 1;
+      note(sel, 0.3, 0.14);
+      wobble.hit('pal' + sel, 7);
+      return true;
+    }
+    if (code === 'KeyN') {
+      loadScene(sceneIdx + 1);
+      return true;
+    }
+    return false;
+  },
+  down(x, y, id) {
+    const hit = paletteHit(x, y);
+    if (hit >= 0) {
+      if (hit === NEXT) {
+        SND.whoosh();
+        note(5, 0.25, 0.12);
+        loadScene(sceneIdx + 1);
+        return;
+      }
+      sel = hit;
+      note(hit === ERASER ? 0 : hit, 0.3, 0.14);
+      wobble.hit('pal' + hit, 7);
+      return;
+    }
+    if (hit === -2) {
+      return;
+    }
+    dragFill = id;
+    if (!fillAt(x, y)) {
+      SND.tok(0.4);
+    }
+  },
+  move(x, y, id) {
+    if (dragFill === id && paletteHit(x, y) === -1) {
+      fillAt(x, y);
+    }
+  },
+  up(x, y, id) {
+    if (dragFill === id) {
+      dragFill = null;
+    }
+  },
+  update(dt) {
+    me.update(dt);
+    introT = Math.min(1, introT + dt * 2.2);
+    for (const r of scene.regions) {
+      if (r.anim) {
+        r.anim.t += dt * 2.6;
+        if (r.anim.t >= 1) {
+          r.col = r.anim.col;
+          r.anim = null;
+        }
+      }
+    }
+    if (!celebrate && scene.regions.every((r) => !r.anim && r.col !== WHITE)) {
+      celebrate = 3;
+      SND.cheer();
+      confetti(OX + FW / 2, OY + FH / 2, 60);
+      kick(40);
+      me.clear();
+      me.push({ pose: P.cheer, d: 0.2, ez: 'out' }, { pose: P.leap, d: 0.3 }, { pose: P.cheer, d: 0.3 }, { pose: P.ready, d: 0.5 });
+    }
+    if (celebrate > 0) {
+      celebrate -= dt;
+      if (celebrate <= 0) {
+        loadScene(sceneIdx + 1);
+      }
+    }
+  },
+  draw() {
+    groundLine();
+    // Picture
+    const k = 0.9 + 0.1 * EASE.out(introT);
+    ctx.save();
+    ctx.translate(OX + FW / 2, OY + FH / 2);
+    ctx.scale(k, k);
+    ctx.translate(-FW / 2, -FH / 2);
+    ctx.globalAlpha = Math.min(1, introT * 2);
+    ctx.save();
+    roundRect(0, 0, FW, FH, 18);
+    ctx.fillStyle = WHITE;
+    ctx.fill();
+    ctx.clip();
+    for (const r of scene.regions) {
+      ctx.fillStyle = r.col;
+      ctx.fill(r.path);
+      if (r.anim) {
+        ctx.save();
+        ctx.clip(r.path);
+        ctx.fillStyle = r.anim.col;
+        ctx.beginPath();
+        ctx.arc(r.anim.x, r.anim.y, 520 * EASE.out(r.anim.t), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.strokeStyle = COL.ink;
+      ctx.lineWidth = 3;
+      ctx.lineJoin = 'round';
+      ctx.stroke(r.path);
+    }
+    ctx.strokeStyle = COL.ink;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    scene.deco();
+    ctx.restore();
+    roundRect(0, 0, FW, FH, 18);
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = COL.ink;
+    ctx.stroke();
+    ctx.restore();
+
+    // Stick figure with a brush in the current colour
+    const brushCol = sel === ERASER ? '#f1f3f5' : COLORS[sel];
+    drawFigure(me, OX + 60, 8, Math.sin(clock * 2) * 1.2, {
+      scale: 1.0,
+      over: (J) => {
+        ctx.save();
+        ctx.translate(J.handF[0], J.handF[1]);
+        ctx.rotate(-0.8);
+        ctx.strokeStyle = '#c98a4b';
+        ctx.lineWidth = 3.4;
+        ctx.lineCap = 'round';
+        line(0, 0, 0, -24);
+        ctx.fillStyle = brushCol;
+        roundRect(-4.5, -36, 9, 14, 4);
+        inkShape(brushCol, 1.6);
+        ctx.restore();
+      },
+    });
+
+    // Palette on the side
+    const p = palette();
+    roundRect(p.cx - p.w / 2, p.top - 6, p.w, p.slot * SLOTS + 12, 16);
+    inkShape('#ffffff', 2.4);
+    for (let i = 0; i < SLOTS; i++) {
+      const cy = p.y(i);
+      const on = i === sel;
+      const s = (on ? 1.18 : 1) * (1 + wobble.get('pal' + i));
+      ctx.save();
+      ctx.translate(p.cx, cy);
+      ctx.scale(s, s);
+      if (i < COLORS.length) {
+        ctx.beginPath();
+        ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+        inkShape(COLORS[i], on ? 4 : 2.4);
+      } else if (i === ERASER) {
+        ctx.beginPath();
+        ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+        inkShape('#ffffff', on ? 4 : 2.4);
+        ctx.strokeStyle = COL.ink;
+        ctx.lineWidth = 2.4;
+        line(-p.r * 0.5, -p.r * 0.5, p.r * 0.5, p.r * 0.5);
+        line(-p.r * 0.5, p.r * 0.5, p.r * 0.5, -p.r * 0.5);
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+        inkShape('#fde68a', 2.4);
+        ctx.strokeStyle = COL.ink;
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(-p.r * 0.45, 0);
+        ctx.lineTo(p.r * 0.4, 0);
+        ctx.moveTo(p.r * 0.05, -p.r * 0.4);
+        ctx.lineTo(p.r * 0.45, 0);
+        ctx.lineTo(p.r * 0.05, p.r * 0.4);
+        ctx.stroke();
+      }
+      ctx.restore();
+      if (on) {
+        ctx.beginPath();
+        ctx.arc(p.cx, cy, p.r * 1.18 + 5, 0, Math.PI * 2);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = COL.ink;
+        ctx.setLineDash([4, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  },
+});
+</script>
+</body>
+</html>
